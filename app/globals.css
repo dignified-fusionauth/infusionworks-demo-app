@@ -1,26 +1,157 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Access-control / credential palette — an internal workplace tool, not a
+     bank and not a generic SaaS dashboard. Cool navy + indigo cardstock with a
+     printed-ID feel. FusionAuth orange is reserved for step-up / attention
+     moments so a challenge reads as "present your badge again".
+     Brand anchor: #F58320 primary, #1E293B accent, #FFFFFF. */
+  --color-ink: #1a2233; /* primary text / dark surfaces (badge header, nav) */
+  --color-ink-soft: #5a6478; /* secondary text */
+  --color-surface: #eef1f7; /* page background — cool lobby gray */
+  --color-card: #ffffff; /* cardstock / raised surfaces */
+  --color-line: #dde2ee; /* hairline on light surfaces */
+  --color-brand: #3b5bdb; /* FusionWorks indigo — nav, links, active state */
+  --color-brand-ink: #2740a8; /* text-safe indigo on light backgrounds */
+  --color-brand-soft: #e6eafb; /* indigo tint fill */
+  --color-signal: #f58320; /* FusionAuth orange — step-up / re-swipe */
+  --color-signal-ink: #9a4e0a; /* text-safe orange on light backgrounds */
+  --color-signal-soft: #fdecd8;
+  --color-verified: #1f8a70; /* teal-green — verified / approved */
+  --color-verified-soft: #e2f2ec;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-ink: var(--color-ink);
+  --color-ink-soft: var(--color-ink-soft);
+  --color-surface: var(--color-surface);
+  --color-card: var(--color-card);
+  --color-line: var(--color-line);
+  --color-brand: var(--color-brand);
+  --color-brand-ink: var(--color-brand-ink);
+  --color-brand-soft: var(--color-brand-soft);
+  --color-signal: var(--color-signal);
+  --color-signal-ink: var(--color-signal-ink);
+  --color-signal-soft: var(--color-signal-soft);
+  --color-verified: var(--color-verified);
+  --color-verified-soft: var(--color-verified-soft);
+
+  --font-display: var(--font-display);
+  --font-body: var(--font-body);
+  --font-mono: var(--font-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+@media (prefers-reduced-motion: no-preference) {
+  .fw-animate-in {
+    animation: fw-fade-up 0.5s ease-out both;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@keyframes fw-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* --- Signature visual element: the employee ID badge on a lanyard --------- */
+
+/* The lanyard strap that sits above a badge card. */
+.fw-lanyard {
+  position: relative;
+  width: 100%;
+  display: flex;
+  justify-content: center;
+}
+
+.fw-lanyard::before {
+  content: "";
+  width: 26px;
+  height: 40px;
+  background: linear-gradient(
+    180deg,
+    var(--color-brand) 0%,
+    var(--color-brand-ink) 100%
+  );
+  clip-path: polygon(38% 0, 62% 0, 62% 62%, 100% 100%, 0 100%, 38% 62%);
+}
+
+/* The metal clip that pins the badge to the lanyard. */
+.fw-clip {
+  width: 46px;
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(180deg, #c7cede, #8b93a8);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  margin: -6px auto 0;
+  position: relative;
+  z-index: 2;
+}
+
+/* The punched hole near the top of the badge. */
+.fw-punch {
+  width: 44px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--color-surface);
+  box-shadow: inset 0 1px 2px rgba(26, 34, 51, 0.35);
+  margin: 0 auto;
+}
+
+/* A printed barcode strip. Irregular bar widths via a layered gradient. */
+.fw-barcode {
+  height: 34px;
+  background-image: repeating-linear-gradient(
+    90deg,
+    var(--color-ink) 0,
+    var(--color-ink) 2px,
+    transparent 2px,
+    transparent 4px,
+    var(--color-ink) 4px,
+    var(--color-ink) 5px,
+    transparent 5px,
+    transparent 8px,
+    var(--color-ink) 8px,
+    var(--color-ink) 11px,
+    transparent 11px,
+    transparent 13px
+  );
+  background-repeat: repeat-x;
+}
+
+/* Perforated tear line — used on the step-up "re-swipe" slip. */
+.fw-perforated {
+  position: relative;
+}
+
+.fw-perforated::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background-image: radial-gradient(
+    circle at center,
+    var(--color-card) 2px,
+    transparent 2.5px
+  );
+  background-size: 14px 1px;
+  background-repeat: repeat-x;
+}
+
+::selection {
+  background: var(--color-brand);
+  color: #ffffff;
+}
+
+/* Visible keyboard focus everywhere, styled instead of suppressed. */
+:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 2px;
+  border-radius: 3px;
 }
