@@ -5,7 +5,7 @@ import { getSession } from "@/lib/session";
 import { accountManagementUrl, twoFactorManagementUrl } from "@/lib/fusionauth";
 
 /**
- * Account settings. Like FusionBank, FusionWorks doesn't build its own profile/
+ * Account settings. Like FusionBank, InFusion Works doesn't build its own profile/
  * password/MFA screens — it links out to FusionAuth's hosted, themable
  * self-service /account pages. The two-factor page is where a user enrolls the
  * methods the /approvals step-up challenge later uses.
@@ -21,7 +21,7 @@ export default async function SettingsPage() {
           Account settings
         </h1>
         <p className="mt-2 text-ink-soft">
-          Your profile lives in FusionAuth, not FusionWorks. These open its
+          Your profile lives in FusionAuth, not InFusion Works. These open its
           hosted self-service pages — the same account UI across every app your
           company signs into with this identity.
         </p>

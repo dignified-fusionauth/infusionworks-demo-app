@@ -2,12 +2,14 @@ import { createRemoteJWKSet, jwtVerify } from "jose";
 import {
   FusionAuthClient,
   MultiFactorAction,
+  Sort,
   type AccessToken,
+  type User,
 } from "@fusionauth/typescript-client";
 import type { EntityGrant as DemoEntityGrant, Permission } from "@/lib/org";
 
 /**
- * All the FusionAuth wiring for FusionWorks lives in this one file, so that
+ * All the FusionAuth wiring for InFusion Works lives in this one file, so that
  * during a demo you can point to a single place and walk through exactly what
  * talks to FusionAuth and when.
  *
@@ -19,7 +21,7 @@ import type { EntityGrant as DemoEntityGrant, Permission } from "@/lib/org";
  *   1. Authorization Code + PKCE against the hosted login, with per-company SSO
  *      deep-linking via `idp_hint` / `login_hint` (the B2B2E enterprise-SSO story).
  *   2. Two-Factor "status" + "login" APIs -> step-up auth for viewing payroll
- *      and approving expenses. App-driven, because only FusionWorks knows which
+ *      and approving expenses. App-driven, because only InFusion Works knows which
  *      actions are sensitive.
  *   3. JWKS verification of the id_token / access_token, so we never trust
  *      unchecked claims. (The typescript-client doesn't verify JWT signatures,
@@ -65,7 +67,7 @@ export const fusionAuthConfig = {
   },
 };
 
-/** The OAuth scope FusionWorks requests. `offline_access` gets us a refresh token. */
+/** The OAuth scope InFusion Works requests. `offline_access` gets us a refresh token. */
 export const OAUTH_SCOPE = "openid offline_access email profile";
 
 /** The redirect_uri handed to FusionAuth's /oauth2/authorize — our callback route. */
@@ -138,13 +140,116 @@ export function buildAuthorizeUrl(opts: {
   return url.toString();
 }
 
-export function buildLogoutUrl(postLogoutRedirectUri?: string) {
-  const url = new URL(`${fusionAuthConfig.baseUrl}/oauth2/logout`);
-  url.searchParams.set("client_id", fusionAuthConfig.clientId);
-  url.searchParams.set(
-    "post_logout_redirect_uri",
-    postLogoutRedirectUri || fusionAuthConfig.appBaseUrl
+/**
+ * A FusionAuth client with NO tenant header pinned, for INSTANCE-LEVEL reads
+ * across tenants.
+ *
+ * The shared faClient() sends `X-FusionAuth-TenantId: <configured default>` on
+ * every request, which makes a read of an object living in ANOTHER tenant (a
+ * company's tenant-scoped IdP) come back 404. Instance-level objects can be read
+ * without a tenant, so we drop the header here. A non-tenant-scoped API key can
+ * then read objects in any tenant. (This is NOT for OAuth token calls — those
+ * need the specific login tenant; see oauthClient.)
+ */
+function untenantedClient(): FusionAuthClient {
+  return new FusionAuthClient(fusionAuthConfig.apiKey, fusionAuthConfig.baseUrl);
+}
+
+/**
+ * A FusionAuth client scoped to a SPECIFIC tenant, for the OAuth token calls.
+ *
+ * Because InFusion Works is a Universal Application, the OAuth token endpoints
+ * (/oauth2/token, refresh, /oauth2/userinfo) REQUIRE a tenant — omitting it
+ * errors `missing_tenant_id`, and pinning the wrong one (the shared client's
+ * default) errors `invalid_grant`. The right tenant is the one the login ran in,
+ * carried from the authorize step (the callback reads it from a short-lived
+ * cookie). Falls back to the configured default only if that's somehow absent.
+ */
+function oauthClient(tenantId?: string): FusionAuthClient {
+  return new FusionAuthClient(
+    fusionAuthConfig.apiKey,
+    fusionAuthConfig.baseUrl,
+    tenantId || fusionAuthConfig.tenantId
   );
+}
+
+/**
+ * Resolves the tenant a login must target, from the per-company Identity
+ * Provider named by `idp_hint`.
+ *
+ * InFusion Works signs in through a Universal Application — one `client_id`
+ * shared across every tenant. A universal app is NOT bound to a tenant, so its
+ * `application.tenantId` is useless here, and FusionAuth REQUIRES `tenantId` on
+ * the authorize URL to know which tenant the user is logging into (there is no
+ * tenant discovery for universal apps). The per-company tenant comes from the
+ * company's tenant-scoped Identity Provider, which carries its owning tenant as
+ * the top-level `tenantId` on `GET /api/identity-provider/{id}` (FusionAuth
+ * 1.62.0+). We read it there and feed it into buildAuthorizeUrl.
+ *
+ * The lookup uses an un-pinned client on purpose: the shared faClient() pins the
+ * configured default tenant via X-FusionAuth-TenantId, which makes reading an
+ * IdP scoped to a DIFFERENT tenant come back 404 — the silent failure that made
+ * this fall back to the default tenant before.
+ *
+ * Cached per IdP id (stable config), so we hit FusionAuth at most once per IdP.
+ * Returns undefined when the lookup fails or the IdP is global (no owning tenant
+ * on the object — a global IdP would need an idp→tenant mapping maintained
+ * externally); callers then fall back to the configured FUSIONAUTH_TENANT_ID.
+ */
+const idpTenantCache = new Map<string, string>();
+export async function getTenantIdForIdp(
+  idpId: string
+): Promise<string | undefined> {
+  if (!idpId) return undefined;
+  const cached = idpTenantCache.get(idpId);
+  if (cached) return cached;
+  try {
+    const res = await untenantedClient().retrieveIdentityProvider(idpId);
+    const tid = res.response.identityProvider?.tenantId;
+    if (typeof tid === "string" && tid) {
+      idpTenantCache.set(idpId, tid);
+      return tid;
+    }
+  } catch {
+    // fall through to undefined -> caller uses the configured default tenant
+  }
+  return undefined;
+}
+
+/**
+ * Logout URL to use because self-service account management is enabled.
+ *
+ * Since FusionAuth 1.45.0 the hosted self-service account pages (/account/*,
+ * which we link to via `accountManagementUrl` / `twoFactorManagementUrl`) run
+ * on their OWN session — separate from both this app's session and the
+ * FusionAuth SSO session. Hitting /oauth2/logout alone leaves that account
+ * session alive, so a user could still reach the account pages after "logging
+ * out". Ending it requires the dedicated /account/logout endpoint, which needs
+ * `client_id` to know which application's self-service session to clear.
+ *
+ * `client_id` is the ONLY parameter to send. Verified against this instance:
+ * /account/logout ends the account session, then chains into /oauth2/logout
+ * (ending the SSO session too — single logout) and finally redirects to the
+ * application's configured "Logout URL" in the FusionAuth admin (set that to
+ * this app's base URL per environment; that's what lands the user back here).
+ *
+ * Do NOT add a `post_logout_redirect_uri` here: /account/logout rejects a
+ * target that isn't a registered redirect URL and then skips the logout
+ * entirely, leaving the account session alive.
+ * See https://github.com/FusionAuth/fusionauth-issues/issues/2298
+ *
+ * `tenantId` IS required whenever the instance has more than one tenant:
+ * without it the logout chain can't resolve which tenant's SSO session to end
+ * and FusionAuth rejects the request with `missing_tenant_id`. `client_id`
+ * alone isn't always enough to disambiguate. Pass the signed-in user's tenant
+ * (the access token's `tid` claim — see lib/session.ts); fall back to the
+ * configured FUSIONAUTH_TENANT_ID. It propagates through to /oauth2/logout.
+ */
+export function buildAccountLogoutUrl(tenantId?: string) {
+  const url = new URL(`${fusionAuthConfig.baseUrl}/account/logout`);
+  url.searchParams.set("client_id", fusionAuthConfig.clientId);
+  const tid = tenantId || fusionAuthConfig.tenantId;
+  if (tid) url.searchParams.set("tenantId", tid);
   return url.toString();
 }
 
@@ -170,23 +275,113 @@ export function twoFactorManagementUrl() {
  * Deep link for the enterprise self-service SSO story on the /admin page. Tenant
  * Manager (FusionAuth 1.65.0+) is where the enterprise CUSTOMER's own IT admin
  * configures their SAML/OIDC connection — entirely inside FusionAuth's hosted
- * admin UI, nothing FusionWorks builds. We only link out to it as a demo talking
+ * admin UI, nothing InFusion Works builds. We only link out to it as a demo talking
  * point: `idp_hint`/`login_hint` is the runtime half (what this app uses), Tenant
- * Manager is the setup half the customer's IT team does themselves. Defaults to
- * the instance root; set FUSIONAUTH_TENANT_MANAGER_URL to the exact self-service
- * URL your instance exposes.
+ * Manager is the setup half the customer's IT team does themselves.
+ *
+ * The link opens `<FUSIONAUTH_URL>/tenant-manager/?tenantId=<tenantId>`, pinned to
+ * the signed-in admin's own tenant (`tid` claim off their access token — see
+ * lib/session.ts) so they land straight on their tenant's connections. Falls back
+ * to the configured tenant when none is passed. Set FUSIONAUTH_TENANT_MANAGER_URL
+ * to override the base if your instance exposes Tenant Manager elsewhere.
  */
-export function tenantManagerUrl(): string {
-  const explicit = process.env.FUSIONAUTH_TENANT_MANAGER_URL?.trim();
-  return (explicit || fusionAuthConfig.baseUrl).replace(/\/$/, "");
+export function tenantManagerUrl(tenantId?: string): string {
+  const base =
+    process.env.FUSIONAUTH_TENANT_MANAGER_URL?.trim() ||
+    `${fusionAuthConfig.baseUrl}/tenant-manager/`;
+  const url = new URL(base);
+  const tid = tenantId || fusionAuthConfig.tenantId;
+  if (tid) url.searchParams.set("tenantId", tid);
+  return url.toString();
 }
 
-/** Exchanges the authorization code for tokens (PKCE). Server-side only. */
+// ---------------------------------------------------------------------------
+// User search (the admin team roster)
+// ---------------------------------------------------------------------------
+
+/** One user in the tenant, flattened for the /admin roster. */
+export interface TenantUser {
+  id: string;
+  name: string;
+  email?: string;
+  /** InFusion Works application roles this user holds (empty if unregistered). */
+  roles: string[];
+}
+
+/** The InFusion Works app roles a user holds, read off their registration. */
+function appRolesForUser(user: User): string[] {
+  const reg = (user.registrations ?? []).find(
+    (r) => r.applicationId === fusionAuthConfig.clientId
+  );
+  return (reg?.roles ?? []).filter(
+    (r): r is string => typeof r === "string" && r !== ""
+  );
+}
+
+/**
+ * Lists the users in a tenant for the admin roster, via the User Search API
+ * (`GET /api/user/search?queryString=*`). Scoped to `tenantId` — the signed-in
+ * admin's own tenant — by pinning the X-FusionAuth-TenantId header on a
+ * tenant-scoped client, so an instance with multiple tenants only returns this
+ * tenant's people.
+ *
+ * Returns `null` (not an empty array) when the search can't run — search engine
+ * not configured (User Search needs the Elasticsearch/OpenSearch backend), or
+ * the API key lacks the scope — so /admin can tell "no users" apart from "not
+ * available" and fall back to the mock roster with an honest banner.
+ */
+export async function searchTenantUsers(
+  tenantId?: string
+): Promise<TenantUser[] | null> {
+  const tid = tenantId || fusionAuthConfig.tenantId;
+  // A fresh, tenant-scoped client rather than mutating the shared singleton,
+  // whose tenant would otherwise leak across concurrent requests.
+  const scoped = new FusionAuthClient(
+    fusionAuthConfig.apiKey,
+    fusionAuthConfig.baseUrl,
+    tid
+  );
+
+  try {
+    const res = await scoped.searchUsersByQuery({
+      search: {
+        queryString: "*",
+        sortFields: [{ name: "email", order: Sort.asc }],
+      },
+    });
+    const users = res.response.users ?? [];
+    return users
+      .map((u) => ({
+        id: u.id ?? "",
+        name:
+          u.fullName ||
+          [u.firstName, u.lastName].filter(Boolean).join(" ") ||
+          u.email ||
+          "Unnamed user",
+        email: u.email,
+        roles: appRolesForUser(u),
+      }))
+      .filter((u) => u.id !== "");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Exchanges the authorization code for tokens (PKCE). Server-side only.
+ *
+ * `tenantId` MUST be the tenant the login ran in (a universal-app /oauth2/token
+ * call requires it, and it has to match the code's tenant). The callback carries
+ * it over from the authorize step. See oauthClient.
+ */
 export async function exchangeCodeForTokens(
   code: string,
-  codeVerifier: string
+  codeVerifier: string,
+  tenantId?: string
 ): Promise<AccessToken> {
-  const res = await faClient().exchangeOAuthCodeForAccessTokenUsingPKCE(
+  const res = await oauthClient(
+    tenantId
+  ).exchangeOAuthCodeForAccessTokenUsingPKCE(
     code,
     fusionAuthConfig.clientId,
     fusionAuthConfig.clientSecret,
@@ -196,11 +391,15 @@ export async function exchangeCodeForTokens(
   return res.response;
 }
 
-/** Trades a refresh token for a fresh access token. Server-side only. */
+/**
+ * Trades a refresh token for a fresh access token. Server-side only. `tenantId`
+ * must be the user's own tenant, for the same reason as exchangeCodeForTokens.
+ */
 export async function refreshAccessToken(
-  refreshToken: string
+  refreshToken: string,
+  tenantId?: string
 ): Promise<AccessToken> {
-  const res = await faClient().exchangeRefreshTokenForAccessToken(
+  const res = await oauthClient(tenantId).exchangeRefreshTokenForAccessToken(
     refreshToken,
     fusionAuthConfig.clientId,
     fusionAuthConfig.clientSecret,
@@ -210,11 +409,17 @@ export async function refreshAccessToken(
   return res.response;
 }
 
-/** Proxies FusionAuth's /oauth2/userinfo for the given access token. */
+/**
+ * Proxies FusionAuth's /oauth2/userinfo for the given access token. `tenantId`
+ * must be the token's own tenant (universal-app requirement).
+ */
 export async function fetchUserInfo(
-  accessToken: string
+  accessToken: string,
+  tenantId?: string
 ): Promise<Record<string, unknown>> {
-  const res = await faClient().retrieveUserInfoFromAccessToken(accessToken);
+  const res = await oauthClient(tenantId).retrieveUserInfoFromAccessToken(
+    accessToken
+  );
   return res.response as Record<string, unknown>;
 }
 
@@ -269,6 +474,13 @@ export interface FusionAuthUserClaims {
   picture?: string;
   /** Present on the ACCESS token (incl. Group-derived roles); absent on id_token. */
   roles?: string[];
+  /**
+   * The user's FusionAuth Group membership UUIDs, put on the access token by the
+   * JWT Populate lambda (fusionauth/lambdas/jwt-populate.js). The lambda emits
+   * IDs only; human-readable names are resolved app-side via `resolveGroupNames`
+   * (cached). Absent unless that lambda is assigned to the application.
+   */
+  groupIds?: string[];
   /** Allow reading any other claim without an unsafe cast at the call site. */
   [claim: string]: unknown;
 }
@@ -470,3 +682,97 @@ export async function upsertGrant(opts: {
     grant: { userId: opts.userId, permissions: opts.permissions },
   });
 }
+
+// ---------------------------------------------------------------------------
+// 4. Group name resolution — turns the access token's `groupIds` claim into
+//    human-readable names, WITHOUT a groupId->name map in the lambda.
+//
+// The lambda (fusionauth/lambdas/jwt-populate.js) emits only stable group ids;
+// we resolve names here via GET /api/group/{groupId}. Because getSession() runs
+// on every protected request, a naive per-request fetch would hammer FusionAuth,
+// so this layer is built to stay flat under load:
+//
+//   * TTL cache (module-level)  — the primary defense. Group names change rarely,
+//     so a resolved name is reused across ALL requests for GROUP_NAME_TTL_MS,
+//     collapsing thousands of page loads into ~1 API call per group per TTL.
+//   * In-flight de-duplication  — when a hot entry expires and N concurrent
+//     requests race to refill it, they share ONE in-flight promise instead of
+//     firing N identical calls (prevents a cache-stampede spike).
+//   * Negative caching          — a missing/deleted/forbidden id is remembered
+//     (briefly) too, so a bad id can't trigger a fetch on every request.
+//
+// Group ids are globally-unique UUIDs, so we read with the un-pinned client
+// (like getTenantIdForIdp): a non-tenant-locked API key resolves a group in ANY
+// tenant by id, which is what B2B2E multi-tenant needs. Cache key is the id
+// alone — no tenant needed.
+// ---------------------------------------------------------------------------
+
+/** How long a resolved (or missing) group name is trusted before re-fetching. */
+const GROUP_NAME_TTL_MS = Number(process.env.GROUP_NAME_TTL_MS) || 60 * 60 * 1000; // 1h
+/** Missing/forbidden ids are re-checked sooner so a fixed group appears quickly. */
+const GROUP_NAME_NEGATIVE_TTL_MS = 5 * 60 * 1000; // 5m
+
+interface CachedGroupName {
+  /** Resolved name, or null when the id is known-absent (negative cache). */
+  name: string | null;
+  expiresAt: number;
+}
+
+const groupNameCache = new Map<string, CachedGroupName>();
+const groupNameInflight = new Map<string, Promise<string | null>>();
+
+/**
+ * Resolves ONE group id to its name, cache-first. Never throws — a lookup
+ * failure caches `null` (so we don't retry every request) and the caller simply
+ * drops that membership from the display list.
+ */
+export async function retrieveGroupName(groupId: string): Promise<string | null> {
+  if (!groupId) return null;
+
+  const cached = groupNameCache.get(groupId);
+  if (cached && cached.expiresAt > Date.now()) return cached.name;
+
+  // Coalesce concurrent misses for the same id onto a single request.
+  const existing = groupNameInflight.get(groupId);
+  if (existing) return existing;
+
+  const promise = (async (): Promise<string | null> => {
+    try {
+      const res = await untenantedClient().retrieveGroup(groupId);
+      const name = res.response.group?.name ?? null;
+      groupNameCache.set(groupId, {
+        name,
+        expiresAt:
+          Date.now() +
+          (name ? GROUP_NAME_TTL_MS : GROUP_NAME_NEGATIVE_TTL_MS),
+      });
+      return name;
+    } catch {
+      // Deleted id, missing scope, or FusionAuth unreachable — negative-cache
+      // briefly so one bad id doesn't fetch on every request.
+      groupNameCache.set(groupId, {
+        name: null,
+        expiresAt: Date.now() + GROUP_NAME_NEGATIVE_TTL_MS,
+      });
+      return null;
+    } finally {
+      groupNameInflight.delete(groupId);
+    }
+  })();
+
+  groupNameInflight.set(groupId, promise);
+  return promise;
+}
+
+/**
+ * Resolves the `groupIds` claim to a de-duplicated, order-preserving list of
+ * group names, dropping any that can't be resolved. Distinct ids are fetched in
+ * parallel but each is cache-guarded + de-duplicated by `retrieveGroupName`, so
+ * the real cost is only the first-seen ids this TTL window.
+ */
+export async function resolveGroupNames(groupIds: string[]): Promise<string[]> {
+  const unique = [...new Set(groupIds.filter(Boolean))];
+  const names = await Promise.all(unique.map(retrieveGroupName));
+  return names.filter((n): n is string => typeof n === "string" && n !== "");
+}
+

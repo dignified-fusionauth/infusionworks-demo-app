@@ -20,7 +20,7 @@ export default function AppShell({
       <TopNav name={session.name ?? "Employee"} isAdmin={isAdmin(session.roles)} />
       <main className="mx-auto w-full max-w-6xl flex-1 px-5 py-8">{children}</main>
       <footer className="border-t border-line px-5 py-6 text-center text-xs text-ink-soft">
-        FusionWorks · a FusionAuth B2B2E demo · not a real workplace system
+        InFusion Works · a FusionAuth B2B2E demo · not a real workplace system
       </footer>
     </>
   );

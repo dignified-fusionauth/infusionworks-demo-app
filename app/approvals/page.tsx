@@ -6,10 +6,10 @@ import { canApprove } from "@/lib/roles";
 import { expenseReports } from "@/lib/org";
 
 /**
- * The step-up-auth demo. Browsing FusionWorks needs no MFA, but revealing
+ * The step-up-auth demo. Browsing InFusion Works needs no MFA, but revealing
  * payroll or approving an expense re-checks the user's identity mid-session —
  * the same pattern as FusionBank's transfer flow. The actual status/challenge/
- * verify round trip runs server-side in /api/approvals/* with FusionWorks' API
+ * verify round trip runs server-side in /api/approvals/* with InFusion Works' API
  * key; this page just hands the client component the data and role gate.
  */
 export default async function ApprovalsPage() {
@@ -36,7 +36,7 @@ export default async function ApprovalsPage() {
         </h1>
         <p className="mt-2 text-ink-soft">
           Sensitive actions re-check your identity even though you&rsquo;re
-          already signed in. FusionWorks asks FusionAuth whether a step-up
+          already signed in. InFusion Works asks FusionAuth whether a step-up
           challenge is required, and if so you&rsquo;ll re-swipe your badge (a
           two-factor code) before the data unlocks.
         </p>

@@ -1,8 +1,8 @@
 /**
- * The demo companies that FusionWorks is "sold to". This is the B2B2E story:
- * FusionWorks is one product, but each customer company signs in through its
+ * The demo companies that InFusion Works is "sold to". This is the B2B2E story:
+ * InFusion Works is one product, but each customer company signs in through its
  * OWN identity provider (Entra ID / Okta / Google Workspace), never a
- * FusionWorks-native password.
+ * InFusion Works-native password.
  *
  * The landing page maps over this array, so the number of companies is a config
  * change here, not a code change on the page. Each company deep-links to its own

@@ -29,7 +29,7 @@ function methodHint(methods: ReswipeMethod[]): string {
 }
 
 /**
- * The step-up challenge UI — FusionWorks' "present your badge again" moment,
+ * The step-up challenge UI — InFusion Works' "present your badge again" moment,
  * styled as a perforated security slip. Analogous to FusionBank's
  * VerificationSlip. Presentational only; the parent owns the two-factor state.
  */

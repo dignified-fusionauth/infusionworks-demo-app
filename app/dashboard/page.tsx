@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { decodeJwt } from "jose";
 import AppShell from "@/components/AppShell";
 import BadgeCard from "@/components/BadgeCard";
+import JwtInspector, { type DecodedToken } from "@/components/JwtInspector";
 import { getSession } from "@/lib/session";
 import { primaryRoleBadge, isAdmin, canApprove } from "@/lib/roles";
 import { ORG_TREE, demoProfileFor, departmentAccent } from "@/lib/org";
@@ -20,10 +22,28 @@ export default async function DashboardPage() {
   const profile = demoProfileFor({
     userId: session.userId,
     roles: session.roles,
+    groups: session.groups,
   });
   const roleBadge = primaryRoleBadge(session.roles);
   const accent = departmentAccent(profile.department);
   const company = ORG_TREE.name;
+
+  // Both tokens were already verified against JWKS inside getSession(); we only
+  // decode the payloads here so the demo can show what FusionAuth put in each.
+  const tokens: DecodedToken[] = [
+    {
+      label: "Access token",
+      claims: decodeJwt(session.accessToken) as Record<string, unknown>,
+      rawToken: session.accessToken,
+    },
+  ];
+  if (session.idToken) {
+    tokens.push({
+      label: "ID token",
+      claims: decodeJwt(session.idToken) as Record<string, unknown>,
+      rawToken: session.idToken,
+    });
+  }
 
   const shortcuts = [
     {
@@ -67,7 +87,7 @@ export default async function DashboardPage() {
           </h1>
           <p className="mt-2 max-w-xl text-ink-soft">
             You signed in through {company}&rsquo;s enterprise SSO — no
-            FusionWorks password involved. Your role below is read from the
+            InFusion Works password involved. Your role below is read from the
             verified access token&rsquo;s <code className="font-[family-name:var(--font-mono)] text-sm text-ink">roles</code>{" "}
             claim, which FusionAuth populates from your group membership.
           </p>
@@ -88,11 +108,34 @@ export default async function DashboardPage() {
           </div>
 
           <div className="mt-8 rounded-xl border border-dashed border-line bg-card/60 p-4 text-sm text-ink-soft">
-            <span className="font-semibold text-ink">Demo note:</span> department
-            and employee number are app metadata derived for the demo — group
-            membership isn&rsquo;t on the JWT by default. Only your{" "}
-            <span className="font-semibold text-ink">role</span> is authoritative,
-            straight from the verified token.
+            <span className="font-semibold text-ink">Demo note:</span>{" "}
+            {profile.departmentFromToken ? (
+              <>
+                your <span className="font-semibold text-ink">department</span> is
+                your real FusionAuth{" "}
+                <span className="font-semibold text-ink">group membership</span>.
+                The access token carries your group{" "}
+                <code className="font-[family-name:var(--font-mono)] text-sm text-ink">
+                  groupIds
+                </code>{" "}
+                (added by the JWT Populate lambda) and the app resolves their
+                names via a cached Group-API lookup. Employee number is demo
+                metadata; your <span className="font-semibold text-ink">role</span>{" "}
+                is authoritative, straight from the verified token.
+              </>
+            ) : (
+              <>
+                department and employee number are app metadata derived for the
+                demo — no{" "}
+                <code className="font-[family-name:var(--font-mono)] text-sm text-ink">
+                  groupIds
+                </code>{" "}
+                claim is on this token, so assign the JWT Populate lambda to show
+                real membership. Only your{" "}
+                <span className="font-semibold text-ink">role</span> is
+                authoritative, straight from the verified token.
+              </>
+            )}
           </div>
         </div>
 
@@ -109,6 +152,8 @@ export default async function DashboardPage() {
           />
         </div>
       </div>
+
+      <JwtInspector tokens={tokens} />
     </AppShell>
   );
 }

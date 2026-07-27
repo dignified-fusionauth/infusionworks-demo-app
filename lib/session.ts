@@ -2,11 +2,11 @@ import { cookies } from "next/headers";
 import { createHash } from "crypto";
 import { EncryptJWT, jwtDecrypt } from "jose";
 import type { AccessToken } from "@fusionauth/typescript-client";
-import { verifyAccessToken, verifyIdToken } from "@/lib/fusionauth";
-import { rolesFromClaims } from "@/lib/roles";
+import { verifyAccessToken, verifyIdToken, resolveGroupNames } from "@/lib/fusionauth";
+import { rolesFromClaims, groupIdsFromClaims } from "@/lib/roles";
 
 /**
- * FusionWorks keeps ONE encrypted, httpOnly session cookie — not a database
+ * InFusion Works keeps ONE encrypted, httpOnly session cookie — not a database
  * session store, and (unlike FusionBank) not the react-sdk's multi-cookie
  * contract. The OAuth tokens are sealed inside it with `jose`'s `EncryptJWT`
  * (dir + A256GCM) using a key derived from SESSION_SECRET, so the cookie is
@@ -36,7 +36,22 @@ export interface Session {
   email?: string;
   name?: string;
   roles: string[];
+  /**
+   * The user's FusionAuth Group membership UUIDs, read from the access token's
+   * `groupIds` claim (populated by fusionauth/lambdas/jwt-populate.js). Empty
+   * when the lambda isn't assigned to the application.
+   */
+  groupIds: string[];
+  /**
+   * Display names for `groupIds`, resolved from the Group API and cached (see
+   * lib/fusionauth.ts `resolveGroupNames`). Empty when there are no memberships,
+   * the lambda isn't assigned, or resolution failed — never blocks sign-in.
+   */
+  groups: string[];
+  /** The user's FusionAuth tenant, off the access token's `tid` claim. */
+  tenantId?: string;
   accessToken: string;
+  idToken?: string;
   refreshToken?: string;
 }
 
@@ -111,6 +126,21 @@ export async function getSession(): Promise<Session | null> {
   }
 
   const roles = rolesFromClaims(claims);
+  // Group membership ids, if the JWT Populate lambda is putting them on the
+  // access token. Resolve their display names via the cached Group-API lookup —
+  // wrapped so a lookup hiccup degrades to "no groups" instead of logging the
+  // user out. Empty when there are no memberships or the lambda isn't assigned.
+  const groupIds = groupIdsFromClaims(claims);
+  let groups: string[] = [];
+  if (groupIds.length > 0) {
+    try {
+      groups = await resolveGroupNames(groupIds);
+    } catch {
+      groups = [];
+    }
+  }
+  // FusionAuth stamps the tenant id on the access token as the `tid` claim.
+  const tenantId = typeof claims.tid === "string" ? claims.tid : undefined;
 
   // Prefer the id_token for display claims (given_name etc. aren't always on the
   // access token); fall back to whatever the access token carries.
@@ -137,7 +167,11 @@ export async function getSession(): Promise<Session | null> {
     email,
     name: name ?? email,
     roles,
+    groupIds,
+    groups,
+    tenantId,
     accessToken: payload.accessToken,
+    idToken: payload.idToken,
     refreshToken: payload.refreshToken,
   };
 }

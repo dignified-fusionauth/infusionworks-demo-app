@@ -16,7 +16,7 @@ const BASE_LINKS = [
 ];
 
 /**
- * The signed-in chrome: FusionWorks lockup, section links (Admin only shows for
+ * The signed-in chrome: InFusion Works lockup, section links (Admin only shows for
  * the admin role), and a sign-out that hits the /api/auth/logout SSO round trip.
  */
 export default function TopNav({ name, isAdmin }: TopNavProps) {
@@ -36,7 +36,7 @@ export default function TopNav({ name, isAdmin }: TopNavProps) {
             FW
           </span>
           <span className="text-base font-bold tracking-tight text-ink font-[family-name:var(--font-display)]">
-            FusionWorks
+            InFusion Works
           </span>
         </Link>
 

@@ -70,7 +70,7 @@ export async function POST(request: NextRequest) {
   });
 }
 
-/** A fake approval reference; FusionWorks has no real approvals ledger. */
+/** A fake approval reference; InFusion Works has no real approvals ledger. */
 export function approvalReference(expenseId: string): string {
   return `FW-${expenseId.replace(/[^0-9A-Z]/gi, "")}-OK`;
 }

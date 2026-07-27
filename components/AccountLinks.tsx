@@ -20,7 +20,7 @@ const LINKS = [
 
 /**
  * Links out to FusionAuth's hosted self-service /account pages rather than
- * FusionWorks building its own. Same approach as FusionBank — the account UI is
+ * InFusion Works building its own. Same approach as FusionBank — the account UI is
  * owned by FusionAuth (and themable in the admin console).
  */
 export default function AccountLinks({
@@ -36,6 +36,8 @@ export default function AccountLinks({
         <a
           key={link.key}
           href={hrefFor(link.key)}
+          target="_blank"
+          rel="noopener noreferrer"
           className="flex items-start gap-3 rounded-xl border border-line bg-card p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
         >
           <span className="text-2xl" aria-hidden="true">
@@ -45,7 +47,7 @@ export default function AccountLinks({
             <p className="font-semibold text-ink">{link.title}</p>
             <p className="mt-0.5 text-sm text-ink-soft">{link.desc}</p>
             <span className="mt-2 inline-block text-sm font-semibold text-brand-ink">
-              Open in FusionAuth →
+              Open →
             </span>
           </div>
         </a>

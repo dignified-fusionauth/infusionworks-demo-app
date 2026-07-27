@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { buildAuthorizeUrl, fusionAuthConfig } from "@/lib/fusionauth";
+import {
+  buildAuthorizeUrl,
+  fusionAuthConfig,
+  getTenantIdForIdp,
+} from "@/lib/fusionauth";
 import { randomUrlSafeString, codeChallengeFromVerifier } from "@/lib/pkce";
 
 /**
  * Shared helpers for the /api/auth/* routes: the Authorization Code + PKCE
- * round trip and the open-redirect guards around it. FusionWorks has no browser
+ * round trip and the open-redirect guards around it. InFusion Works has no browser
  * SDK, so these routes are the entire auth surface.
  */
 
@@ -12,6 +16,9 @@ import { randomUrlSafeString, codeChallengeFromVerifier } from "@/lib/pkce";
 export const STATE_COOKIE = "fw_oauth_state";
 export const VERIFIER_COOKIE = "fw_pkce_verifier";
 export const RETURN_COOKIE = "fw_return_to";
+// The tenant the login ran in, so the callback's token exchange can pin the
+// same tenant (a universal-app /oauth2/token call requires it).
+export const TENANT_COOKIE = "fw_oauth_tenant";
 
 const TEMP_COOKIE_OPTS = {
   httpOnly: true,
@@ -41,49 +48,44 @@ export function safeReturnTo(raw: string | null): string {
   }
 }
 
-/** Same idea for the post-logout redirect, but FusionAuth needs an absolute URL. */
-export function safePostLogoutRedirect(raw: string | null): string {
-  if (!raw) return fusionAuthConfig.appBaseUrl;
-  try {
-    const url = new URL(raw, fusionAuthConfig.appBaseUrl);
-    if (url.origin !== appOrigin()) return fusionAuthConfig.appBaseUrl;
-    // FusionAuth validates post_logout_redirect_uri against the application's
-    // Authorized redirect URLs with an EXACT string match, so the trailing "/"
-    // matters. The URL serializer always appends "/" to a bare origin; drop it
-    // so the value matches an origin registered without a trailing slash.
-    return url.pathname === "/" && !url.search && !url.hash
-      ? url.origin
-      : url.toString();
-  } catch {
-    return fusionAuthConfig.appBaseUrl;
-  }
-}
-
 /**
  * Starts the Authorization Code + PKCE redirect. Reads the B2B2E SSO hints off
  * the query (`idpHint` / `loginHint` / `tenantId`) and passes them through so a
  * company button deep-links to its own IdP and the work-email form routes by
  * managed domain. Stores state/verifier/return in short-lived cookies for the
  * callback to validate.
+ *
+ * Because InFusion Works uses a Universal Application, the authorize URL must
+ * name the tenant (a universal app isn't tenant-bound, so FusionAuth can't infer
+ * it). Unless the caller pins an explicit `tenantId`, we derive it from the
+ * company's tenant-scoped IdP named by `idpHint`. See getTenantIdForIdp.
  */
-export function startOAuthRedirect(request: NextRequest) {
+export async function startOAuthRedirect(request: NextRequest) {
   const q = request.nextUrl.searchParams;
   const state = randomUrlSafeString(16);
   const codeVerifier = randomUrlSafeString(32);
   const codeChallenge = codeChallengeFromVerifier(codeVerifier);
   const returnTo = safeReturnTo(q.get("redirect_uri"));
 
+  const idpHint = q.get("idpHint") || undefined;
+  const explicitTenant = q.get("tenantId") || undefined;
+  const tenantId =
+    explicitTenant ?? (idpHint ? await getTenantIdForIdp(idpHint) : undefined);
+
   const authorizeUrl = buildAuthorizeUrl({
     state,
     codeChallenge,
-    idpHint: q.get("idpHint") || undefined,
+    idpHint,
     loginHint: q.get("loginHint") || undefined,
-    tenantId: q.get("tenantId") || undefined,
+    tenantId,
   });
 
   const response = NextResponse.redirect(authorizeUrl);
   response.cookies.set(STATE_COOKIE, state, TEMP_COOKIE_OPTS);
   response.cookies.set(VERIFIER_COOKIE, codeVerifier, TEMP_COOKIE_OPTS);
   response.cookies.set(RETURN_COOKIE, returnTo, TEMP_COOKIE_OPTS);
+  // Remember which tenant this login used, so the callback pins the same tenant
+  // on the token exchange (required for the universal app).
+  if (tenantId) response.cookies.set(TENANT_COOKIE, tenantId, TEMP_COOKIE_OPTS);
   return response;
 }

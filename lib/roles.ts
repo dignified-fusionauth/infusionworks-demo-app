@@ -1,20 +1,24 @@
 /**
  * Application Role helpers. In FusionAuth, an employee's Group membership maps
  * to Application Roles, and those roles ride on the ACCESS token's `roles` claim
- * automatically once the user is registered for the FusionWorks application —
+ * automatically once the user is registered for the InFusion Works application —
  * including roles granted via Group membership, with no JWT Populate lambda.
  *
- * So FusionWorks role-gates entirely off the verified access-token `roles`
+ * So InFusion Works role-gates entirely off the verified access-token `roles`
  * claim (see lib/session.ts): the /admin page checks for the admin role here,
  * and the dashboard badge shows the employee's highest role.
  *
- * NOTE: Group membership ITSELF (which departments you're in) is not on the JWT
- * by default — that needs a Group-API lookup / Populate lambda (a paid feature).
- * For the demo we treat "department" as app metadata (see lib/org.ts) and drive
- * authorization decisions from `roles` only.
+ * Group membership ITSELF (which departments you're in) is NOT on the JWT by
+ * default. InFusion Works surfaces it via a JWT Populate lambda
+ * (fusionauth/lambdas/jwt-populate.js) that stamps a `groupIds` claim on the
+ * access token; `groupIdsFromClaims` below reads those ids, and the app resolves
+ * their display names at runtime with a cached Group-API lookup (see
+ * lib/fusionauth.ts `resolveGroupNames`). When that lambda isn't assigned, the
+ * claim is empty and the UI falls back to demo metadata. Authorization decisions
+ * still key off `roles` only — groups are informational.
  */
 
-/** The roles FusionWorks understands, least → most privileged. */
+/** The roles InFusion Works understands, least → most privileged. */
 export const ROLE_EMPLOYEE = "employee";
 export const ROLE_MANAGER = "manager";
 
@@ -53,7 +57,26 @@ export function rolesFromClaims(claims: Record<string, unknown>): string[] {
   return [];
 }
 
-/** Case-insensitive membership check. */
+/**
+ * Extracts the user's Group membership IDS from verified token claims. These
+ * come from the `groupIds` claim added by our JWT Populate lambda; the display
+ * names are resolved separately (and cached) via lib/fusionauth.ts. We tolerate
+ * a single string or comma-separated list the same way `rolesFromClaims` does.
+ * Returns [] when the lambda isn't assigned (the claim is absent).
+ */
+export function groupIdsFromClaims(claims: Record<string, unknown>): string[] {
+  const raw = claims.groupIds;
+  if (Array.isArray(raw)) {
+    return raw.filter((g): g is string => typeof g === "string" && g !== "");
+  }
+  if (typeof raw === "string" && raw.trim() !== "") {
+    return raw
+      .split(",")
+      .map((g) => g.trim())
+      .filter(Boolean);
+  }
+  return [];
+}
 export function hasRole(roles: string[], role: string): boolean {
   const target = role.toLowerCase();
   return roles.some((r) => r.toLowerCase() === target);

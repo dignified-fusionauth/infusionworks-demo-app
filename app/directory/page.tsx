@@ -11,7 +11,7 @@ import { flattenOrg, demoGrantsForRoles, type EntityGrant } from "@/lib/org";
  * keyed by entity id. The teaching point: FusionAuth does NOT auto-cascade
  * permissions up or down that hierarchy — so this page walks the tree ITSELF and
  * marks each node "direct grant" (FusionAuth returned it) vs "via traversal"
- * (FusionWorks honored an ancestor's grant in app code). Automatic cascading is
+ * (InFusion Works honored an ancestor's grant in app code). Automatic cascading is
  * exactly what FusionAuth FGA by Permify adds — called out below as a sales beat,
  * not working code.
  */
@@ -136,7 +136,7 @@ export default async function DirectoryPage() {
             <span className="rounded border border-dashed border-line px-1.5 py-0.5 text-[11px] font-medium text-ink-soft font-[family-name:var(--font-mono)]">
               via traversal
             </span>{" "}
-            is FusionWorks walking the hierarchy in app code to decide effective
+            is InFusion Works walking the hierarchy in app code to decide effective
             access. That traversal logic is yours to own.
           </p>
         </div>

@@ -1,5 +1,5 @@
 /**
- * Mock org data for FusionWorks — kept deliberately separate from the real
+ * Mock org data for InFusion Works — kept deliberately separate from the real
  * FusionAuth calls in lib/fusionauth.ts (the same split FusionBank uses between
  * lib/accounts.ts and lib/fusionauth.ts). Nothing here is a live lookup.
  *
@@ -15,11 +15,13 @@
  *  2. Everyday demo content — departments, employees, expense reports, a payroll
  *     summary — used by the dashboard, directory, approvals, and admin pages.
  *
- * "Department" here is app metadata, NOT a live FusionAuth Group lookup (group
- * membership isn't on the JWT by default — see lib/roles.ts).
+ * "Department" is a display concept: the dashboard now prefers the user's REAL
+ * FusionAuth Group membership when the JWT Populate lambda supplies it (see
+ * session.groups / lib/roles.ts), and only falls back to a derived mock
+ * department when it doesn't. The entity tree and content below remain mock.
  */
 
-import { ROLE_MANAGER, adminRoleName, hasRole, isAdmin } from "@/lib/roles";
+import { ROLE_MANAGER, hasRole, isAdmin } from "@/lib/roles";
 
 export type EntityType = "Company" | "Department" | "Resource";
 
@@ -177,78 +179,50 @@ export function demoGrantsForRoles(roles: string[]): EntityGrant[] {
 }
 
 // ---------------------------------------------------------------------------
-// People — used by the dashboard (the signed-in employee's demo profile),
-// the directory people list, and the admin team roster.
+// People — the signed-in employee's demo profile for the dashboard. (The admin
+// team roster is now the tenant's real FusionAuth users — see lib/fusionauth.ts
+// searchTenantUsers — not mock data.)
 // ---------------------------------------------------------------------------
 
-export interface DemoEmployee {
-  employeeId: string;
-  name: string;
-  title: string;
-  department: string;
-  /** Which app role this person maps to, for the admin roster display. */
-  role: string;
-  email: string;
-}
-
-export const demoTeam: DemoEmployee[] = [
-  {
-    employeeId: "E-1042",
-    name: "Priya Nair",
-    title: "Engineering Manager",
-    department: "Engineering",
-    role: ROLE_MANAGER,
-    email: "priya.nair@northwind.example",
-  },
-  {
-    employeeId: "E-2213",
-    name: "Marcus Bell",
-    title: "Staff Engineer",
-    department: "Engineering",
-    role: "employee",
-    email: "marcus.bell@northwind.example",
-  },
-  {
-    employeeId: "E-3391",
-    name: "Dana Okafor",
-    title: "Finance Lead",
-    department: "Finance",
-    role: ROLE_MANAGER,
-    email: "dana.okafor@northwind.example",
-  },
-  {
-    employeeId: "E-4457",
-    name: "Sven Holt",
-    title: "People Ops Partner",
-    department: "People Ops",
-    role: "employee",
-    email: "sven.holt@northwind.example",
-  },
-];
-
 /**
- * A stable-but-fake employee profile for whoever is signed in. Department and
- * employee number are demo metadata derived deterministically from the user's
- * id/email so the badge looks consistent across a session — NOT a FusionAuth
- * lookup. The role comes from the real verified token (passed in) and is the
- * one thing here that's authoritative.
+ * The employee profile shown on the dashboard badge. The `department` is now the
+ * user's real FusionAuth Group membership when available — the JWT Populate
+ * lambda puts group names on the access token and getSession() surfaces them as
+ * `session.groups` (pass them in as `groups`). Only when membership is absent
+ * (lambda not assigned) do we fall back to a stable-but-fake department derived
+ * from the user's id, so the demo still renders. The employee number stays demo
+ * metadata; the role comes from the real verified token and is authoritative.
  */
 const DEPARTMENTS = ["Engineering", "Finance", "People Ops"] as const;
 
 export function demoProfileFor(opts: {
   userId: string;
   roles: string[];
-}): { department: string; employeeId: string; roleTitle: string } {
+  /** Real Group membership names off the token (session.groups). */
+  groups?: string[];
+}): {
+  department: string;
+  employeeId: string;
+  roleTitle: string;
+  /** True when `department` came from real JWT group membership, not the mock. */
+  departmentFromToken: boolean;
+} {
   let hash = 0;
   for (const ch of opts.userId) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
-  const department = DEPARTMENTS[hash % DEPARTMENTS.length];
+
+  // Prefer the first real group membership from the verified token; fall back to
+  // the deterministic mock department only when the lambda supplied none.
+  const realDepartment = opts.groups?.find((g) => g.trim() !== "");
+  const departmentFromToken = Boolean(realDepartment);
+  const department = realDepartment ?? DEPARTMENTS[hash % DEPARTMENTS.length];
+
   const employeeId = `E-${1000 + (hash % 9000)}`;
   const roleTitle = isAdmin(opts.roles)
     ? "Workspace Administrator"
     : hasRole(opts.roles, ROLE_MANAGER)
       ? `${department} Manager`
       : `${department} Team Member`;
-  return { department, employeeId, roleTitle };
+  return { department, employeeId, roleTitle, departmentFromToken };
 }
 
 /** Accent color for a department name (used for badge bands + directory chips). */
@@ -317,11 +291,4 @@ export function formatCents(cents: number): string {
     maximumFractionDigits: 2,
   });
   return `${sign}$${dollars}`;
-}
-
-/** Role label for the admin roster, resolving the configurable admin name. */
-export function roleLabel(role: string): string {
-  if (role === adminRoleName()) return "Administrator";
-  if (role === ROLE_MANAGER) return "Manager";
-  return "Employee";
 }

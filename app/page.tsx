@@ -1,6 +1,8 @@
+import { redirect } from "next/navigation";
 import CompanyPicker from "@/components/CompanyPicker";
 import WorkEmailForm from "@/components/WorkEmailForm";
 import { resolveCompanies } from "@/lib/companies";
+import { getSession } from "@/lib/session";
 
 const ERRORS: Record<string, string> = {
   invalid_state: "That sign-in link expired. Please try again.",
@@ -12,6 +14,12 @@ export default async function LandingPage({
 }: {
   searchParams: Promise<{ error?: string }>;
 }) {
+  // Already authenticated visitors never see the landing/sign-in page — send
+  // them to their dashboard. getSession() fully verifies the access token, so
+  // an expired or tampered session falls through and renders the sign-in page.
+  const session = await getSession();
+  if (session) redirect("/dashboard");
+
   const companies = resolveCompanies();
   const { error } = await searchParams;
   const errorMessage = error ? (ERRORS[error] ?? "Sign-in failed.") : null;
@@ -29,7 +37,7 @@ export default async function LandingPage({
               FW
             </span>
             <span className="text-base font-bold tracking-tight font-[family-name:var(--font-display)]">
-              FusionWorks
+              InFusion Works
             </span>
           </div>
           <h1 className="mt-8 max-w-2xl text-4xl font-bold leading-tight tracking-tight font-[family-name:var(--font-display)] sm:text-5xl">

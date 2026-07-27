@@ -14,7 +14,7 @@ export interface OrgTreeRow {
   /**
    * How the access was determined:
    *  - "direct":    a grant exists on this exact entity
-   *  - "inherited": no direct grant, but FusionWorks decided to honor an
+   *  - "inherited": no direct grant, but InFusion Works decided to honor an
    *                 ancestor's grant by walking the tree ITSELF (FusionAuth did
    *                 not cascade it)
    *  - "none":      no access
@@ -51,7 +51,7 @@ function AccessPill({ row }: { row: OrgTreeRow }) {
       </span>
       {row.source === "inherited" ? (
         <span
-          title="FusionAuth did not cascade this — FusionWorks computed it by traversing the hierarchy in app code."
+          title="FusionAuth did not cascade this — InFusion Works computed it by traversing the hierarchy in app code."
           className="rounded-full border border-dashed border-line px-2 py-0.5 text-[11px] font-medium text-ink-soft font-[family-name:var(--font-mono)]"
         >
           via traversal
@@ -69,7 +69,7 @@ function AccessPill({ row }: { row: OrgTreeRow }) {
  * Renders the Company → Department → Resource entity tree with the signed-in
  * user's effective access per node. "direct grant" vs "via traversal" makes the
  * no-auto-cascade point visible: FusionAuth returns only direct grants; anything
- * marked "via traversal" is FusionWorks walking the hierarchy itself.
+ * marked "via traversal" is InFusion Works walking the hierarchy itself.
  */
 export default function OrgTree({ rows }: { rows: OrgTreeRow[] }) {
   return (

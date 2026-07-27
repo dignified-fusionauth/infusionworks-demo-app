@@ -7,7 +7,7 @@ import { payrollSummary } from "@/lib/org";
  * POST /api/approvals/payroll
  *
  * The step-up-auth demo, payroll edition. Browsing the app needs no MFA;
- * revealing compensation data is sensitive, so before FusionWorks returns it we
+ * revealing compensation data is sensitive, so before InFusion Works returns it we
  * ask FusionAuth: "does this user need to re-verify to do this?"
  *
  *  - 200 (no challenge)  -> return the payroll summary immediately.
@@ -15,7 +15,7 @@ import { payrollSummary } from "@/lib/org";
  *                           code and calls /api/approvals/verify, which returns
  *                           the payroll data on success.
  *
- * Runs with FusionWorks' own API key, never the user's token — the two-factor
+ * Runs with InFusion Works' own API key, never the user's token — the two-factor
  * endpoints are privileged FusionAuth APIs.
  */
 export async function POST(request: NextRequest) {

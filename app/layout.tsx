@@ -22,7 +22,7 @@ const mono = Space_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "FusionWorks — a FusionAuth B2B2E demo",
+  title: "InFusion Works — a FusionAuth B2B2E demo",
   description:
     "An internal people & approvals hub showing FusionAuth enterprise SSO, group-driven roles, entity management, and step-up auth.",
 };

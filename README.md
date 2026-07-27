@@ -1,14 +1,18 @@
-# FusionWorks — a FusionAuth B2B2E demo
+# InFusion Works — a FusionAuth B2B2E demo
 
-FusionWorks is an internal **people & approvals hub**: one product, sold to a
+InFusion Works is an internal **people & approvals hub**: one product, sold to a
 company, used by that company's employees. It's the **B2B2E** companion to
-[FusionBank](../fusionbank) (which is B2C). Where FusionBank shows consumer MFA
-and step-up auth, FusionWorks shows the enterprise story:
+[InFusion Bank](https://github.com/dignified-fusionauth/infusionbank-demo-app) (which is B2C). Where InFusion Bank shows consumer MFA
+and step-up auth, InFusion Works shows the enterprise story:
 
 1. **Enterprise SSO** — employees sign in through their own company's identity
-   provider (Entra ID / Okta / Google Workspace), never a FusionWorks password.
+   provider (Entra ID / Okta / Google Workspace), never a InFusion Works password.
    Each company button on the landing page deep-links straight to its IdP via
    FusionAuth's `idp_hint`; a "type your work email" fallback uses `login_hint`.
+   InFusion Works is a **Universal Application** and each company lives in its own
+   **tenant**, so every login is pinned to the right tenant — resolved from the
+   company's tenant-scoped IdP (see
+   [Multi-tenant login](#multi-tenant-login-universal-application)).
 2. **Groups → Application Roles** — department/group membership drives what
    someone can do (employee vs. manager vs. admin), read off the **verified
    access-token `roles` claim** — no JWT Populate lambda needed.
@@ -17,12 +21,12 @@ and step-up auth, FusionWorks shows the enterprise story:
    doesn't auto-cascade permissions** across the hierarchy (that's FGA by
    Permify).
 4. **Step-up auth** — viewing payroll or approving an expense re-checks MFA
-   mid-session, the same status → challenge → verify flow as FusionBank's
+   mid-session, the same status → challenge → verify flow as InFusion Bank's
    transfer.
 5. **Self-service account management** — links out to FusionAuth's hosted
    `/account` pages instead of building profile/password/MFA screens.
 
-Same conventions as FusionBank: **direct Authorization Code + PKCE** against
+Same conventions as InFusion Bank: **direct Authorization Code + PKCE** against
 FusionAuth's OAuth endpoints (no NextAuth.js, no `@fusionauth/react-sdk`), a
 single **encrypted `jose` session cookie**, all FusionAuth calls centralized in
 `lib/fusionauth.ts`, and route protection in **`proxy.ts`** (Next.js 16 renamed
@@ -52,8 +56,10 @@ single **encrypted `jose` session cookie**, all FusionAuth calls centralized in
   compiles and builds with placeholder env; you need a real instance only to
   actually sign in.
 - At least one configured **Identity Provider** per company you want to enable
-  (SAML v2 or OIDC). Companies with no IdP configured render as "Not configured
-  yet" rather than erroring, so you can start with one and add more.
+  (SAML v2 or OIDC), each **tenant-scoped** to that company's tenant (FusionAuth
+  1.62.0+) since the login reads the tenant off the IdP. Companies with no IdP
+  configured render as "Not configured yet" rather than erroring, so you can
+  start with one and add more.
 - For the **Entity Management** page against live data and for **step-up auth**,
   a FusionAuth plan that includes those features. Without them the directory
   falls back to demo grants (with a visible banner) and step-up simply reports
@@ -87,9 +93,9 @@ The essentials:
 | Variable | What it is |
 | --- | --- |
 | `FUSIONAUTH_URL` | Base URL of your FusionAuth instance. |
-| `FUSIONAUTH_CLIENT_ID` / `FUSIONAUTH_CLIENT_SECRET` | The FusionWorks Application's OAuth credentials. `client_id` is also the JWT `aud`. |
-| `FUSIONAUTH_API_KEY` | Server-side key for the Two-Factor (step-up) and Entity Management calls. |
-| `FUSIONAUTH_TENANT_ID` | *(optional)* Pin a specific tenant. |
+| `FUSIONAUTH_CLIENT_ID` / `FUSIONAUTH_CLIENT_SECRET` | The InFusion Works Application's OAuth credentials. `client_id` is also the JWT `aud`. |
+| `FUSIONAUTH_API_KEY` | Server-side key for the IdP-tenant lookup, Two-Factor (step-up), and Entity Management calls. Must be **non-tenant-scoped** (reads IdPs across tenants). |
+| `FUSIONAUTH_TENANT_ID` | *(optional)* Fallback/default tenant. Per-login the tenant is resolved from the company's IdP; this is only used when that resolution yields nothing (e.g. a global IdP, or the plain login with no company). |
 | `APP_BASE_URL` | Public URL of this app; builds the OAuth `redirect_uri` and same-origin guards. |
 | `SESSION_SECRET` | Secret hashed to the AES key that encrypts the session cookie. `openssl rand -base64 48`. |
 | `FUSIONWORKS_ADMIN_ROLE` | *(optional)* Role name that unlocks `/admin`. Defaults to `admin`. |
@@ -104,18 +110,25 @@ its own `FUSIONAUTH_IDP_ID_*` var.
 
 ## FusionAuth admin setup
 
-### 1. Create the FusionWorks Application
+### 1. Create the InFusion Works Application
 
-1. **Applications → Add**. Name it *FusionWorks*.
+1. **Applications → Add**. Name it *InFusion Works*.
 2. On the **OAuth** tab, set the Authorized redirect URL to
    `http://localhost:3000/api/auth/callback` (and your deployed URL), and the
-   Logout URL to `http://localhost:3000`. Enable the **Authorization Code**
-   grant and **PKCE** (required — this app always sends `code_challenge`).
+   **Logout URL** to `http://localhost:3000` (your real app URL in prod). Enable
+   the **Authorization Code** grant and **PKCE** (required — this app always
+   sends `code_challenge`).
 3. Copy the **Client Id** and **Client secret** into `FUSIONAUTH_CLIENT_ID` /
    `FUSIONAUTH_CLIENT_SECRET`.
-4. Note that FusionAuth's `post_logout_redirect_uri` is matched **exactly**
-   against the registered URLs — the app deliberately drops a trailing slash off
-   a bare origin so it matches (see `safePostLogoutRedirect` in `lib/bff.ts`).
+   - Make this a **Universal Application** (available to all tenants) so the one
+     `client_id` serves every company/tenant. That's what makes `tenantId`
+     required on every login — see
+     [Multi-tenant login](#multi-tenant-login-universal-application).
+4. The **Logout URL** is where users land after signing out, and it must be set
+   per environment. Logout sends only `client_id` to `/account/logout` (no
+   `post_logout_redirect_uri`), so this application setting — not the app —
+   controls the post-logout landing page. See
+   [Logout & the self-service account session](#logout--the-self-service-account-session).
 
 ### 2. Configure each company's Identity Provider
 
@@ -125,10 +138,10 @@ Two well-documented paths (either works for `idp_hint`):
 - **Okta via OIDC** — FusionAuth docs:
   *Identity Providers → OpenID Connect*, plus Okta's app-integration guide.
   Create an OIDC IdP in FusionAuth, paste Okta's client id/secret and issuer,
-  and **enable it for the FusionWorks application**.
+  and **enable it for the InFusion Works application**.
 - **Google Workspace via SAML v2** — FusionAuth docs:
   *Identity Providers → SAML v2*. Create the SAML IdP, upload Google's IdP
-  metadata/certificate, and enable it for the FusionWorks application.
+  metadata/certificate, and enable it for the InFusion Works application.
 - **Entra ID** — either OIDC or SAML v2; both have FusionAuth guides.
 
 For **managed-domain routing** (the "type your work email" flow via
@@ -146,19 +159,25 @@ UUID (also on the provider's edit screen). Copy it into the matching
 skips FusionAuth's hosted IdP picker and redirects straight to that provider —
 which is exactly what each company button builds.
 
+Make each IdP **tenant-scoped** (created within that company's tenant — FusionAuth
+1.62.0+), not global. The app reads the tenant off the IdP to pin the login to
+the right tenant (see
+[Multi-tenant login](#multi-tenant-login-universal-application)); a global IdP
+has no owning tenant, so the login would fall back to `FUSIONAUTH_TENANT_ID`.
+
 ### 4. Groups & Roles (department-based RBAC)
 
-1. On the FusionWorks Application, define **Roles**: `employee`, `manager`, and
+1. On the InFusion Works Application, define **Roles**: `employee`, `manager`, and
    `admin` (match `FUSIONWORKS_ADMIN_ROLE` if you rename `admin`).
 2. Create **Groups** (e.g. *Engineering*, *Finance*, *People Ops*) and attach
-   the appropriate FusionWorks Application **Role** to each group.
+   the appropriate InFusion Works Application **Role** to each group.
 3. Add users to groups. Because role claims from group membership ride on the
    **access token** automatically once the user is registered for the
-   application, FusionWorks role-gates entirely off the verified token — the
+   application, InFusion Works role-gates entirely off the verified token — the
    `/admin` page checks for the admin role, the badge shows the highest role.
 
 > **Group membership itself is *not* on the JWT by default** (that needs a JWT
-> Populate lambda calling the Group API — a paid feature). So FusionWorks treats
+> Populate lambda calling the Group API — a paid feature). So InFusion Works treats
 > "department" as demo metadata (`lib/org.ts`) and drives every authorization
 > decision from the `roles` claim only. The ID token also does **not** carry
 > `roles` (removed in 1.24.0) — this app reads roles from the **access token**.
@@ -167,11 +186,18 @@ which is exactly what each company button builds.
 
 Create an API key (**Settings → API Keys**) with permission on:
 
+- `GET /api/identity-provider` — resolve each company's tenant from its IdP for
+  the multi-tenant login (see
+  [Multi-tenant login](#multi-tenant-login-universal-application)).
 - `POST /api/two-factor/status` — step-up: is a challenge required?
 - `POST /api/two-factor/start` and `POST /api/two-factor/send` — begin the
   challenge and deliver an email/SMS code.
 - `POST /api/two-factor/login` — complete the challenge with the entered code.
 - `POST /api/entity/grant/search` — the Entity Management directory (paid plan).
+
+> **The key must be non-tenant-scoped** (no tenant selected on the key). It reads
+> IdPs that live in *other* tenants; a tenant-locked key would 404 on those and
+> the login would silently fall back to the default tenant.
 
 Step-up also needs an **MFA policy** (or a lambda) that actually asks for a
 challenge on the `stepUp` action for the sensitive operations; otherwise
@@ -182,9 +208,14 @@ challenge on the `stepUp` action for the sensitive operations; otherwise
 ## How auth works here (the one-file tour)
 
 - **`lib/fusionauth.ts`** — every FusionAuth interaction: building the
-  authorize/logout URLs (with `idp_hint`/`login_hint`/`tenantId`), the PKCE code
-  exchange, JWKS verification of the id/access tokens, the two-factor step-up
-  calls, and the Entity grant reads. Point at this file during a demo.
+  authorize/logout URLs (with `idp_hint`/`login_hint`/`tenantId`), resolving a
+  company's tenant from its IdP (`getTenantIdForIdp`), the PKCE code exchange,
+  JWKS verification of the id/access tokens, the two-factor step-up calls, and
+  the Entity grant reads. Also home to the two tenant-scoping client helpers —
+  `untenantedClient` (cross-tenant reads) and `oauthClient` (token calls pinned
+  to the login's tenant); see
+  [Multi-tenant login](#multi-tenant-login-universal-application). Point at this
+  file during a demo.
 - **`lib/session.ts`** — one encrypted, httpOnly cookie (`jose` `EncryptJWT`,
   `dir` + `A256GCM`, key derived from `SESSION_SECRET`). The cookie is opaque to
   the browser, and identity is only trusted after the **access token inside it
@@ -194,7 +225,105 @@ challenge on the `stepUp` action for the sensitive operations; otherwise
 - **`proxy.ts`** — cheap cookie-presence gate on `/dashboard`, `/directory`,
   `/approvals`, `/admin`, `/settings`. Full verification is per-page/route.
 - **`lib/org.ts` / `lib/companies.ts`** — all mock data, kept separate from real
-  FusionAuth calls (the FusionBank `lib/accounts.ts` split).
+  FusionAuth calls (the InFusion Bank `lib/accounts.ts` split).
+
+---
+
+## Multi-tenant login (Universal Application)
+
+InFusion Works signs in through a **Universal Application** — one `client_id`
+that every tenant shares — and each demo company lives in its **own tenant**. A
+universal application is *not* bound to a single tenant, so FusionAuth cannot
+infer which tenant a login belongs to: **`tenantId` is required** on both the
+authorize request and the token exchange, or FusionAuth rejects the request with
+`missing_tenant_id`. There is no tenant discovery for universal apps, so the app
+has to supply the tenant itself.
+
+The tenant is derived from the company's **tenant-scoped Identity Provider**
+(FusionAuth 1.62.0+), which carries its owning tenant as the top-level
+`tenantId` on `GET /api/identity-provider/{id}`. The flow, all in
+`lib/fusionauth.ts` + `lib/bff.ts` + the two `/api/auth/*` routes:
+
+1. **`GET /api/auth/login?idpHint=<idpId>`** — `startOAuthRedirect` (`lib/bff.ts`)
+   calls `getTenantIdForIdp(idpId)`, which reads the IdP's `tenantId`. An explicit
+   `?tenantId=` query param overrides this.
+2. The resolved tenant is put on the **authorize URL** (`&tenantId=…`, via
+   `buildAuthorizeUrl`) *and* stashed in a short-lived `fw_oauth_tenant` cookie
+   alongside the PKCE `state`/`verifier`.
+3. After the IdP round trip, **`GET /api/auth/callback`** reads `fw_oauth_tenant`
+   and passes it into `exchangeCodeForTokens(code, verifier, tenant)`, so the
+   **`/oauth2/token` call is pinned to the same tenant the login ran in**. The
+   code was issued under that tenant; pinning any other tenant (or none) fails.
+
+Two client-scoping rules make this work and are easy to break — the shared
+`FusionAuthClient` singleton sends `X-FusionAuth-TenantId: <FUSIONAUTH_TENANT_ID>`
+on *every* call, which is the wrong tenant here:
+
+- **Cross-tenant reads use an un-pinned client** (`untenantedClient`). Reading a
+  company's IdP with the default-tenant header returns **404** (silently falling
+  back to the default tenant, so the login lands in the wrong tenant). Dropping
+  the header lets a non-tenant-scoped API key read instance-level objects in any
+  tenant.
+- **OAuth token calls use a client pinned to the login's tenant** (`oauthClient`),
+  *not* the configured default. Pinning the default gives `invalid_grant` (the
+  code isn't in that tenant); pinning nothing gives `missing_tenant_id`.
+
+> **Requirements for this to work against a live instance:** the `FUSIONAUTH_API_KEY`
+> must be **non-tenant-scoped** and include **`GET /api/identity-provider`** (see
+> [API key permissions](#5-api-key-permissions)), and each company's IdP must be
+> **tenant-scoped** so `identityProvider.tenantId` is populated. If an IdP is a
+> *global* IdP (no owning tenant), `getTenantIdForIdp` returns nothing and the
+> login falls back to `FUSIONAUTH_TENANT_ID` — for that case, map the tenant
+> explicitly instead (e.g. a per-company tenant var in `lib/companies.ts`).
+
+---
+
+## Logout & the self-service account session
+
+Signing out has to end **three** independent sessions, not one — this is the
+wrinkle that self-service account management adds:
+
+1. **The app session** — our encrypted `fw_session` cookie.
+2. **The FusionAuth SSO session** — the hosted-login session shared across every
+   application in the tenant.
+3. **The self-service account session** — a *separate* session FusionAuth mints
+   (since 1.45.0) the first time a user opens the hosted `/account` pages, which
+   InFusion Works links to from **Settings**. This is the catch: it is **not**
+   ended by clearing the app session, and **not** ended by `/oauth2/logout`.
+   Skipping it leaves the user still authenticated on `/account` after they've
+   "signed out" of everything else.
+
+`GET /api/auth/logout` handles all three in a single top-level navigation:
+
+1. Deletes the local `fw_session` cookie (`clearSession()` in `lib/session.ts`).
+2. Redirects the browser to **`/account/logout?client_id=…`**
+   (`buildAccountLogoutUrl` in `lib/fusionauth.ts`).
+
+That one endpoint chains the rest itself: it ends the account session, redirects
+into `/oauth2/logout` (ending the SSO session), and finally lands the user on the
+application's configured **Logout URL**. It has to be a real top-level
+navigation — the account session lives in `HttpOnly`, `SameSite=Lax` cookies on
+FusionAuth's origin, so it can't be reached from a background `fetch`, an
+`<img>`, or a cross-origin iframe (all of which drop the cookie), and `/account`
+is served with `X-Frame-Options: DENY` besides.
+
+Two rules, both verified live against a real instance, are baked into the code
+and easy to accidentally break:
+
+- **Send only `client_id`.** Do *not* add a `post_logout_redirect_uri` to the
+  `/account/logout` URL. If you pass a target that isn't a registered redirect
+  URL, FusionAuth **abandons the logout entirely** and the account session
+  survives — meanwhile the app has already dropped its own cookie, producing the
+  confusing "app is logged out but `/account` is still authenticated" bug.
+- **The landing page comes from the app's Logout URL**, not from a per-request
+  value. Because we send no `post_logout_redirect_uri`, where the user ends up is
+  controlled solely by the application's **Logout URL** in the FusionAuth admin
+  (see [FusionAuth admin setup](#1-create-the-infusion-works-application)). Set
+  it per environment.
+
+> This mirrors the documented FusionAuth guidance for self-service logout —
+> redirect to `/account/logout?client_id=…` — and the behavior tracked in
+> [fusionauth-issues#2298](https://github.com/FusionAuth/fusionauth-issues/issues/2298).
 
 ---
 
@@ -207,7 +336,7 @@ permissions up or down a hierarchy** — a grant on a department does not grant 
 child resources. Your app must traverse grants itself.
 
 The `/directory` page makes this visible: FusionAuth returns only the **direct
-grants**, and every node the page marks **"via traversal"** is FusionWorks
+grants**, and every node the page marks **"via traversal"** is InFusion Works
 walking the tree in app code to compute effective access (see the traversal in
 `app/directory/page.tsx`). If you want inheritance handled *for* you — ReBAC/ABAC
 with a schema that cascades — that's **FusionAuth FGA by Permify** (Enterprise

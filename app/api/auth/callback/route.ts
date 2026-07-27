@@ -2,7 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { exchangeCodeForTokens, verifyIdToken } from "@/lib/fusionauth";
 import { setSession } from "@/lib/session";
-import { STATE_COOKIE, VERIFIER_COOKIE, RETURN_COOKIE } from "@/lib/bff";
+import {
+  STATE_COOKIE,
+  VERIFIER_COOKIE,
+  RETURN_COOKIE,
+  TENANT_COOKIE,
+} from "@/lib/bff";
 
 /**
  * GET /api/auth/callback
@@ -28,6 +33,9 @@ export async function GET(request: NextRequest) {
   const expectedState = request.cookies.get(STATE_COOKIE)?.value;
   const codeVerifier = request.cookies.get(VERIFIER_COOKIE)?.value;
   const returnTo = request.cookies.get(RETURN_COOKIE)?.value || "/dashboard";
+  // The tenant this login ran in (set at authorize). The universal-app token
+  // exchange must be pinned to it.
+  const loginTenant = request.cookies.get(TENANT_COOKIE)?.value;
 
   if (
     !code ||
@@ -40,7 +48,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const tokens = await exchangeCodeForTokens(code, codeVerifier);
+    const tokens = await exchangeCodeForTokens(code, codeVerifier, loginTenant);
     // Fail fast if the id_token doesn't verify — don't trust unchecked claims.
     if (tokens.id_token) {
       await verifyIdToken(tokens.id_token);
@@ -59,6 +67,7 @@ export async function GET(request: NextRequest) {
   store.delete(STATE_COOKIE);
   store.delete(VERIFIER_COOKIE);
   store.delete(RETURN_COOKIE);
+  store.delete(TENANT_COOKIE);
 
   return NextResponse.redirect(new URL(returnTo, request.url));
 }
