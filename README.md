@@ -53,7 +53,7 @@ single **encrypted `jose` session cookie**, all FusionAuth calls centralized in
 
 ## Prerequisites
 
-- Node.js 20+ and npm.
+- Node.js 20.9+ and npm (required by Next.js 16).
 - A running **FusionAuth** instance (self-hosted or FusionAuth Cloud). The demo
   compiles and builds with placeholder env; you need a real instance only to
   actually sign in.
@@ -103,7 +103,7 @@ The essentials:
 | `FUSIONAUTH_TENANT_ID` | *(optional)* Fallback/default tenant. Per-login the tenant is resolved from the company's IdP; this is only used when that resolution yields nothing (e.g. a global IdP, or the plain login with no company). |
 | `APP_BASE_URL` | Public URL of this app; builds the OAuth `redirect_uri` and same-origin guards. |
 | `SESSION_SECRET` | Secret hashed to the AES key that encrypts the session cookie. `openssl rand -base64 48`. |
-| `FUSIONWORKS_ADMIN_ROLE` | *(optional)* Role name that unlocks `/admin`. Defaults to `admin`. |
+| `INFUSIONWORKS_ADMIN_ROLE` | *(optional)* Role name that unlocks `/admin`. Defaults to `admin`. |
 | `FUSIONAUTH_IDP_ID_NORTHWIND` / `_VERTEX` / `_MERIDIAN` | Each IdP-backed demo company's Identity Provider **UUID** for `idp_hint`. (The LDAP "Atlas" company has no IdP and needs no var.) |
 | `FUSIONAUTH_TENANT_MANAGER_URL` | *(optional)* Exact Tenant Manager URL linked from `/admin`. |
 
@@ -177,7 +177,7 @@ has no owning tenant, so the login would fall back to `FUSIONAUTH_TENANT_ID`.
 ### 4. Groups & Roles (department-based RBAC)
 
 1. On the InFusion Works Application, define **Roles**: `employee`, `manager`, and
-   `admin` (match `FUSIONWORKS_ADMIN_ROLE` if you rename `admin`).
+   `admin` (match `INFUSIONWORKS_ADMIN_ROLE` if you rename `admin`).
 2. Create **Groups** (e.g. *Engineering*, *Finance*, *People Ops*) and attach
    the appropriate InFusion Works Application **Role** to each group.
 3. Add users to groups. Because role claims from group membership ride on the
@@ -501,3 +501,48 @@ runtime half is `idp_hint`/`login_hint`, which is all this app touches. The
   instance with real IdPs configured.
 - No live Permify/FGA server integration.
 - No database — mock data and FusionAuth are the only data sources.
+
+---
+
+## Project structure
+
+```
+app/
+  page.tsx                       Landing — company grid (SSO deep-links) + work-email auto-discovery
+  dashboard/page.tsx             Signed-in home — ID badge, role chip, JWT inspector
+  directory/page.tsx             Entity Management demo — direct grants vs "via traversal"
+  approvals/page.tsx             Step-up demo — view payroll / approve expense
+  admin/page.tsx                 Role-gated admin — tenant users + Tenant Manager link
+  settings/page.tsx              Account settings — links out to hosted /account pages
+  settings/account/route.ts      Hands off to FusionAuth's hosted account pages
+  api/auth/login/route.ts        Starts PKCE (idpHint / loginHint / tenantId SSO hints)
+  api/auth/callback/route.ts     Exchanges the code (tenant-pinned), seals the session cookie
+  api/auth/logout/route.ts       Clears the session, then /account/logout (ends account + SSO sessions)
+  api/approvals/payroll/route.ts Step-up status/start for viewing payroll
+  api/approvals/expense/route.ts Step-up status/start for approving an expense
+  api/approvals/verify/route.ts  Completes step-up (POST /api/two-factor/login)
+lib/
+  fusionauth.ts   All FusionAuth API calls — authorize/logout URLs, IdP→tenant + email→IdP lookup, PKCE exchange, JWKS, step-up, entity grants
+  bff.ts          Shared /api/auth/* helpers — PKCE round trip, SSO hints, open-redirect guard
+  session.ts      One encrypted cookie; JWKS-verified reads; roles + groupIds off the access token
+  roles.ts        Reads the access-token `roles` claim; the /admin gate + role badge
+  pkce.ts         PKCE verifier/challenge generation
+  companies.ts    Demo companies config — per-company IdP vs LDAP login modes
+  org.ts          Mock org tree + entity grants + payroll/expense data
+components/
+  TopNav.tsx          Signed-in nav (Admin link for admins) + sign-out
+  AppShell.tsx        Shared signed-in page chrome (server component)
+  CompanyPicker.tsx   Landing company grid → per-company SSO deep-links
+  WorkEmailForm.tsx   "Type your work email" auto-discovery form (GET → login)
+  BadgeCard.tsx       The employee ID badge (name, company, department, role)
+  RoleBadge.tsx       Small colored role chip
+  BadgeReswipe.tsx    The step-up MFA challenge UI ("re-swipe your badge")
+  ApprovalActions.tsx Approvals buttons + step-up state machine
+  OrgTree.tsx         Directory tree rows (direct vs inherited access)
+  JwtInspector.tsx    Tabbed decoded access/ID token viewer (display-only)
+  AccountLinks.tsx    Links out to FusionAuth's hosted account pages
+fusionauth/
+  lambdas/jwt-populate.js  Stamps the user's `groupIds` onto the access token
+public/                    Static SVG assets (Next.js defaults)
+proxy.ts    Route protection for /dashboard, /directory, /approvals, /admin, /settings (Next.js 16's replacement for middleware.ts)
+```

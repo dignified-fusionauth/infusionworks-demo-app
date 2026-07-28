@@ -27,7 +27,7 @@ export const ROLE_MANAGER = "manager";
  * FusionAuth application calls it. Defaults to "admin".
  */
 export function adminRoleName(): string {
-  return (process.env.FUSIONWORKS_ADMIN_ROLE || "admin").trim();
+  return (process.env.INFUSIONWORKS_ADMIN_ROLE || "admin").trim();
 }
 
 /** Privilege order for picking a "primary" role to show on the badge. */
