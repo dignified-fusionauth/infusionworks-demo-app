@@ -6,9 +6,11 @@ company, used by that company's employees. It's the **B2B2E** companion to
 and step-up auth, InFusion Works shows the enterprise story:
 
 1. **Enterprise SSO** — employees sign in through their own company's identity
-   provider (Entra ID / Okta / Google Workspace), never a InFusion Works password.
-   Each company button on the landing page deep-links straight to its IdP via
-   FusionAuth's `idp_hint`; a "type your work email" fallback uses `login_hint`.
+   provider (Entra ID / Okta / Google Workspace) or an on-prem directory (LDAP),
+   never a InFusion Works password. Each company button on the landing page
+   deep-links straight to its IdP via FusionAuth's `idp_hint`; a "type your work
+   email" box **auto-discovers** the right IdP + tenant from the email domain
+   (see [Email auto-discovery](#email-auto-discovery-type-your-work-email)).
    InFusion Works is a **Universal Application** and each company lives in its own
    **tenant**, so every login is pinned to the right tenant — resolved from the
    company's tenant-scoped IdP (see
@@ -59,7 +61,10 @@ single **encrypted `jose` session cookie**, all FusionAuth calls centralized in
   (SAML v2 or OIDC), each **tenant-scoped** to that company's tenant (FusionAuth
   1.62.0+) since the login reads the tenant off the IdP. Companies with no IdP
   configured render as "Not configured yet" rather than erroring, so you can
-  start with one and add more.
+  start with one and add more. A company can alternatively have **no IdP at all**
+  (e.g. an **LDAP connector**, which FusionAuth authenticates on its hosted login
+  page); such a card links to the default hosted login instead of an `idp_hint`
+  deep-link — see [Companies & login modes](#companies--login-modes).
 - For the **Entity Management** page against live data and for **step-up auth**,
   a FusionAuth plan that includes those features. Without them the directory
   falls back to demo grants (with a visible banner) and step-up simply reports
@@ -99,12 +104,14 @@ The essentials:
 | `APP_BASE_URL` | Public URL of this app; builds the OAuth `redirect_uri` and same-origin guards. |
 | `SESSION_SECRET` | Secret hashed to the AES key that encrypts the session cookie. `openssl rand -base64 48`. |
 | `FUSIONWORKS_ADMIN_ROLE` | *(optional)* Role name that unlocks `/admin`. Defaults to `admin`. |
-| `FUSIONAUTH_IDP_ID_NORTHWIND` / `_VERTEX` / `_MERIDIAN` | Each demo company's Identity Provider **UUID** for `idp_hint`. |
+| `FUSIONAUTH_IDP_ID_NORTHWIND` / `_VERTEX` / `_MERIDIAN` | Each IdP-backed demo company's Identity Provider **UUID** for `idp_hint`. (The LDAP "Atlas" company has no IdP and needs no var.) |
 | `FUSIONAUTH_TENANT_MANAGER_URL` | *(optional)* Exact Tenant Manager URL linked from `/admin`. |
 
 Companies are configured in [`lib/companies.ts`](./lib/companies.ts) — add or
-remove entries freely; the landing grid adapts and each new company just needs
-its own `FUSIONAUTH_IDP_ID_*` var.
+remove entries freely; the landing grid adapts. An IdP-backed company points at
+its own `FUSIONAUTH_IDP_ID_*` var; a company with **no IdP** (e.g. LDAP) simply
+omits `idpEnvVar` and its card falls back to the default hosted login. See
+[Companies & login modes](#companies--login-modes).
 
 ---
 
@@ -144,11 +151,13 @@ Two well-documented paths (either works for `idp_hint`):
   metadata/certificate, and enable it for the InFusion Works application.
 - **Entra ID** — either OIDC or SAML v2; both have FusionAuth guides.
 
-For **managed-domain routing** (the "type your work email" flow via
-`login_hint`), set each IdP's **Managed domains** to that company's email domain
-(e.g. `northwind.example`). FusionAuth then matches a typed email to the right
-IdP automatically. *(Note: `login_hint` does not work with SAML v2
-IdP-Initiated or HYPR providers.)*
+For the **"type your work email" auto-discovery** flow, set each IdP's **Managed
+domains** to that company's email domain(s) (e.g. `northwind.example`). The app
+reads those domains back from FusionAuth to route a typed email to the right IdP
+**and** its tenant — no domain list is hardcoded in the app. See
+[Email auto-discovery](#email-auto-discovery-type-your-work-email) for exactly
+how the match is done (and why it does **not** use the `/api/identity-provider/lookup`
+endpoint).
 
 ### 3. Find each IdP's UUID (for `idp_hint`)
 
@@ -187,7 +196,8 @@ has no owning tenant, so the login would fall back to `FUSIONAUTH_TENANT_ID`.
 Create an API key (**Settings → API Keys**) with permission on:
 
 - `GET /api/identity-provider` — resolve each company's tenant from its IdP for
-  the multi-tenant login (see
+  the multi-tenant login, and build the domain→IdP map for
+  [email auto-discovery](#email-auto-discovery-type-your-work-email) (see
   [Multi-tenant login](#multi-tenant-login-universal-application)).
 - `POST /api/two-factor/status` — step-up: is a challenge required?
 - `POST /api/two-factor/start` and `POST /api/two-factor/send` — begin the
@@ -209,13 +219,20 @@ challenge on the `stepUp` action for the sensitive operations; otherwise
 
 - **`lib/fusionauth.ts`** — every FusionAuth interaction: building the
   authorize/logout URLs (with `idp_hint`/`login_hint`/`tenantId`), resolving a
-  company's tenant from its IdP (`getTenantIdForIdp`), the PKCE code exchange,
-  JWKS verification of the id/access tokens, the two-factor step-up calls, and
-  the Entity grant reads. Also home to the two tenant-scoping client helpers —
-  `untenantedClient` (cross-tenant reads) and `oauthClient` (token calls pinned
-  to the login's tenant); see
+  company's tenant from its IdP (`getTenantIdForIdp`), email→IdP auto-discovery
+  (`lookupIdpByEmail`; see
+  [Email auto-discovery](#email-auto-discovery-type-your-work-email)), the PKCE
+  code exchange, JWKS verification of the id/access tokens, the two-factor step-up
+  calls, and the Entity grant reads. Also home to the two tenant-scoping client
+  helpers — `untenantedClient` (cross-tenant reads) and `oauthClient` (token calls
+  pinned to the login's tenant); see
   [Multi-tenant login](#multi-tenant-login-universal-application). Point at this
   file during a demo.
+- **`lib/bff.ts`** — the `/api/auth/*` glue: `startOAuthRedirect` reads the SSO
+  hints off the query (`idpHint` / `loginHint` / `tenantId`), runs email
+  auto-discovery when only an email is given, pins the resolved tenant, and sets
+  the short-lived PKCE/state/return/tenant cookies for the callback. Also the
+  open-redirect guard (`safeReturnTo`).
 - **`lib/session.ts`** — one encrypted, httpOnly cookie (`jose` `EncryptJWT`,
   `dir` + `A256GCM`, key derived from `SESSION_SECRET`). The cookie is opaque to
   the browser, and identity is only trusted after the **access token inside it
@@ -275,6 +292,100 @@ on *every* call, which is the wrong tenant here:
 > *global* IdP (no owning tenant), `getTenantIdForIdp` returns nothing and the
 > login falls back to `FUSIONAUTH_TENANT_ID` — for that case, map the tenant
 > explicitly instead (e.g. a per-company tenant var in `lib/companies.ts`).
+
+---
+
+## Companies & login modes
+
+The landing grid is driven entirely by the `companies` array in
+[`lib/companies.ts`](./lib/companies.ts) — the page maps over it, so adding a
+customer is a config change, not a code change. Each company resolves to one of
+two **login modes**, decided by whether it names an IdP env var:
+
+| Mode | When | Card behavior |
+| --- | --- | --- |
+| `"idp"` | The company sets `idpEnvVar` (e.g. `FUSIONAUTH_IDP_ID_NORTHWIND`) | Deep-links to `/api/auth/login?idpHint=<uuid>`, which becomes `idp_hint` on the authorize URL and skips FusionAuth's IdP picker. Disabled ("Not configured yet") until the env var holds a UUID. |
+| `"default"` | The company omits `idpEnvVar` (e.g. an **LDAP connector**) | Links to `/api/auth/login` with **no** `idp_hint`. FusionAuth's hosted login authenticates the user (the LDAP connector runs there). Always enabled. |
+
+`resolveCompany()` (in `lib/companies.ts`) sets `loginMode` and `configured`
+accordingly, and `CompanyPicker.tsx` builds the right URL and CTA label ("Sign in
+with SSO" vs. "Sign in") from it.
+
+> **Why LDAP is `"default"`:** an **LDAP connector is not an Identity Provider**,
+> so it has no IdP UUID and cannot be targeted with `idp_hint`. FusionAuth
+> authenticates LDAP on its hosted login page directly. The demo's "Atlas LDAP
+> Directory" company is modeled this way and needs no `FUSIONAUTH_IDP_ID_*` var.
+> An LDAP-only login lands on the **default tenant** (`FUSIONAUTH_TENANT_ID`); if
+> your connector lives in a non-default tenant, pass `?tenantId=` (or add a
+> per-company tenant to the config).
+
+---
+
+## Email auto-discovery ("type your work email")
+
+The "Not sure which one?" box on the landing page
+([`components/WorkEmailForm.tsx`](./components/WorkEmailForm.tsx)) lets an
+employee skip the company grid and just type their work email. The app resolves
+that email's **domain → Identity Provider → owning tenant** and deep-links
+straight into the right company's SSO — with **no domain→IdP mapping hardcoded in
+the app**. The mapping is read live from each IdP's **Managed domains** in
+FusionAuth.
+
+### The flow
+
+1. The form is a plain **GET** to `/api/auth/login?loginHint=<email>` — no client
+   JS, progressively enhanced.
+2. `startOAuthRedirect` (`lib/bff.ts`) sees a `loginHint` but no `idpHint`, and
+   calls `lookupIdpByEmail(email)` in `lib/fusionauth.ts`.
+3. `lookupIdpByEmail` extracts the domain (`dana@northwind.example` →
+   `northwind.example`) and looks it up in a **domain → { idpId, tenantId } map**
+   built from FusionAuth.
+4. On a hit, the login redirects with **both** `idp_hint=<idpId>` **and**
+   `tenantId=<owning tenant>` — the tenant is mandatory because this is a
+   Universal Application (see
+   [Multi-tenant login](#multi-tenant-login-universal-application)).
+5. On a miss (no IdP owns the domain — e.g. an LDAP company, or an unknown
+   address), the email is still passed through as `login_hint` and the user lands
+   on the **default** hosted login.
+
+### How the domain map is built (and why not the `lookup` endpoint)
+
+`lookupIdpByEmail` builds its map by calling **`GET /api/identity-provider`**
+(`retrieveIdentityProviders()`) with the **un-pinned** client, then matching the
+domain against each IdP's `domains` (Managed domains) array and reading the
+owning `tenantId` straight off the IdP object. The result is cached in-process
+with a short TTL (`IDP_DOMAIN_TTL_MS`, default **5 min**) and in-flight
+de-duplicated, so a burst of logins costs at most **one** list call per window.
+
+FusionAuth *does* ship a purpose-built endpoint for this —
+`GET /api/identity-provider/lookup?domain=…` — but it is **not** used here, on
+purpose:
+
+- **Discovery is tenant-agnostic.** An email alone doesn't tell you the tenant.
+  The `lookup` endpoint only resolves **global** IdPs unless you pass a
+  `tenantId` **query parameter** — but every customer IdP in this demo is
+  **tenant-scoped**, so a plain lookup returns **404** (which is exactly the bug
+  that made every typed email fall back to the default login during development).
+- **You'd need N calls.** To use `lookup` for tenant-scoped IdPs you must already
+  know the tenant, or loop `lookupIdentityProviderByTenantId(domain, tenantId)`
+  once **per tenant**. Listing all IdPs once (cached) covers every tenant in a
+  single call and hands back the owning `tenantId` we need anyway.
+- (Gotcha for anyone re-testing `lookup`: it honors `tenantId` only as a **query
+  parameter**, *not* via the `X-FusionAuth-TenantId` header — unlike the
+  Identity Provider *search* API, which the header overrides.)
+
+### Requirements
+
+- Each customer IdP must have its **Managed domains** populated in FusionAuth
+  (Settings → Identity Providers → *your IdP* → **Managed domains**). No domains
+  → nothing to match → the email falls back to the default login.
+- Same key requirement as multi-tenant login: `FUSIONAUTH_API_KEY` must be
+  **non-tenant-scoped** and allow **`GET /api/identity-provider`** (see
+  [API key permissions](#5-api-key-permissions)); otherwise the list read can't
+  see IdPs across tenants and discovery silently returns nothing.
+- Matching is **exact per domain** (same as FusionAuth's own managed-domain
+  matching), so `dignifiedlabs.com` and `entraid.dignifiedlabs.com` stay distinct
+  — no subdomain bleed.
 
 ---
 
@@ -362,8 +473,10 @@ runtime half is `idp_hint`/`login_hint`, which is all this app touches. The
 
 1. **Pick a company.** On the landing page, click a configured company card —
    you're deep-linked *straight* to that company's IdP (no FusionAuth IdP
-   picker) via `idp_hint`. (Or type a work email to show `login_hint` managed-
-   domain routing.)
+   picker) via `idp_hint`. (Or type a work email to show
+   [auto-discovery](#email-auto-discovery-type-your-work-email): the app resolves
+   the domain to the right IdP **and** tenant and deep-links there — or, for an
+   LDAP/unknown domain, falls back to the default hosted login.)
 2. **Land on a role-appropriate dashboard.** Your ID badge shows your name,
    company, department, and a **role chip read from the verified access token**.
    Point out that only the role is authoritative; department is demo metadata.

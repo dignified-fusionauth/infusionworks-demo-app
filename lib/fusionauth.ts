@@ -217,6 +217,94 @@ export async function getTenantIdForIdp(
 }
 
 /**
+ * Email-based Identity Provider auto-discovery. Given a work email (or bare
+ * domain), finds which Identity Provider owns that email domain and returns its
+ * `id` (for `idp_hint`) and owning `tenantId` (required on the Universal
+ * Application's authorize URL).
+ *
+ * The mapping is NOT hardcoded in this app — it's read live from each IdP's
+ * "Managed Domains" (`domains`) in FusionAuth. Add or change a company's domains
+ * in FusionAuth and the work-email form routes correctly with no code change.
+ *
+ * Why we DON'T use `GET /api/identity-provider/lookup?domain=…`: that endpoint
+ * only resolves instance/default-tenant IdPs. In this B2B2E setup every customer
+ * IdP is TENANT-SCOPED (each carries its own `tenantId`), and the lookup endpoint
+ * 404s for those — which silently dropped every email back to the default login.
+ * Instead we list all IdPs (un-pinned client, so we see IdPs across every tenant)
+ * and match the domain against each IdP's `domains` array ourselves, which also
+ * hands us the owning `tenantId` off the IdP object.
+ *
+ * The domain→IdP map is cached with a short TTL so a burst of logins costs at
+ * most one list call per window; a domain with no owning IdP returns undefined
+ * so the caller falls back to a plain `login_hint` on the default tenant.
+ */
+interface IdpDomainMatch {
+  idpId: string;
+  tenantId?: string;
+}
+
+const IDP_DOMAIN_TTL_MS =
+  Number(process.env.IDP_DOMAIN_TTL_MS) || 5 * 60 * 1000; // 5m
+/** Shorter cooldown after a failed refresh so an outage doesn't spawn a call per login. */
+const IDP_DOMAIN_NEGATIVE_TTL_MS = 30 * 1000; // 30s
+let idpDomainMap: Map<string, IdpDomainMatch> | null = null;
+let idpDomainMapExpiresAt = 0;
+let idpDomainMapInflight: Promise<Map<string, IdpDomainMatch>> | null = null;
+
+async function getIdpDomainMap(): Promise<Map<string, IdpDomainMatch>> {
+  if (idpDomainMap && idpDomainMapExpiresAt > Date.now()) return idpDomainMap;
+  if (idpDomainMapInflight) return idpDomainMapInflight;
+
+  idpDomainMapInflight = (async () => {
+    try {
+      const res = await untenantedClient().retrieveIdentityProviders();
+      const idps = res.response.identityProviders ?? [];
+      const map = new Map<string, IdpDomainMatch>();
+      for (const idp of idps) {
+        // `enabled` defaults to true when absent; skip only when explicitly off.
+        if (idp.enabled === false || !idp.id) continue;
+        // `domains` (Managed Domains) isn't on the base type but is present at
+        // runtime on the concrete IdP JSON.
+        const domains = (idp as { domains?: unknown }).domains;
+        if (!Array.isArray(domains)) continue;
+        for (const d of domains) {
+          if (typeof d === "string" && d.trim()) {
+            map.set(d.trim().toLowerCase(), {
+              idpId: idp.id,
+              tenantId: idp.tenantId,
+            });
+          }
+        }
+      }
+      idpDomainMap = map;
+      idpDomainMapExpiresAt = Date.now() + IDP_DOMAIN_TTL_MS;
+      return map;
+    } catch {
+      // Serve the last good map (stale) if we have one, else an empty map, and
+      // back off for a short window so a FusionAuth outage under login traffic
+      // doesn't fire retrieveIdentityProviders() on every request.
+      idpDomainMap = idpDomainMap ?? new Map<string, IdpDomainMatch>();
+      idpDomainMapExpiresAt = Date.now() + IDP_DOMAIN_NEGATIVE_TTL_MS;
+      return idpDomainMap;
+    } finally {
+      idpDomainMapInflight = null;
+    }
+  })();
+
+  return idpDomainMapInflight;
+}
+
+export async function lookupIdpByEmail(
+  emailOrDomain: string
+): Promise<IdpDomainMatch | undefined> {
+  const raw = emailOrDomain.trim().toLowerCase();
+  const domain = raw.includes("@") ? raw.slice(raw.lastIndexOf("@") + 1) : raw;
+  if (!domain) return undefined;
+  const map = await getIdpDomainMap();
+  return map.get(domain);
+}
+
+/**
  * Logout URL to use because self-service account management is enabled.
  *
  * Since FusionAuth 1.45.0 the hosted self-service account pages (/account/*,

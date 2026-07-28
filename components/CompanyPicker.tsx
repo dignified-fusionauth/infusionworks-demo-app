@@ -1,11 +1,13 @@
 import type { ResolvedCompany } from "@/lib/companies";
 
 /**
- * The "choose your company" grid. Each configured company deep-links to its own
- * IdP via /api/auth/login?idpHint=<idpId> (which becomes `idp_hint` on the
- * authorize URL, skipping FusionAuth's hosted IdP picker). A company with no
- * configured IdP UUID renders disabled with "Not configured yet" instead of
- * building a broken URL.
+ * The "choose your company" grid. A company with a configured IdP deep-links to
+ * it via /api/auth/login?idpHint=<idpId> (which becomes `idp_hint` on the
+ * authorize URL, skipping FusionAuth's hosted IdP picker). A company with no IdP
+ * (e.g. an LDAP connector, `loginMode: "default"`) links to /api/auth/login with
+ * NO idp_hint, landing on the default hosted login where FusionAuth authenticates
+ * the connector. A company that expects an IdP UUID but has none configured
+ * renders disabled with "Not configured yet" instead of a broken URL.
  */
 export default function CompanyPicker({
   companies,
@@ -15,9 +17,15 @@ export default function CompanyPicker({
   return (
     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
       {companies.map((company) => {
-        const href = `/api/auth/login?idpHint=${encodeURIComponent(
-          company.idpId
-        )}&redirect_uri=${encodeURIComponent("/dashboard")}`;
+        const redirect = `redirect_uri=${encodeURIComponent("/dashboard")}`;
+        // LDAP/connector companies have no idpId — go to the default hosted
+        // login; IdP companies deep-link with idp_hint.
+        const href =
+          company.loginMode === "default"
+            ? `/api/auth/login?${redirect}`
+            : `/api/auth/login?idpHint=${encodeURIComponent(
+                company.idpId
+              )}&${redirect}`;
 
         const inner = (
           <>
@@ -43,7 +51,9 @@ export default function CompanyPicker({
               </span>
               {company.configured ? (
                 <span className="text-sm font-semibold text-brand-ink">
-                  Sign in with SSO →
+                  {company.loginMode === "default"
+                    ? "Sign in →"
+                    : "Sign in with SSO →"}
                 </span>
               ) : (
                 <span className="text-xs font-medium text-ink-soft">

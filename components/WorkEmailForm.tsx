@@ -1,8 +1,12 @@
 /**
- * The "or enter your work email" fallback. A plain GET form to /api/auth/login,
- * so the typed email arrives as `?loginHint=…` and FusionAuth matches it against
- * an IdP's configured managed domains and routes automatically — no client JS
- * required. (login_hint isn't supported for SAML v2 IdP-Initiated or HYPR IdPs.)
+ * The "enter your work email" auto-discovery form. A plain GET form to
+ * /api/auth/login, so the typed email arrives as `?loginHint=…` with no client
+ * JS. Server-side (see lib/bff.ts -> startOAuthRedirect), the email's domain is
+ * matched against each IdP's Managed Domains in FusionAuth (lib/fusionauth.ts ->
+ * lookupIdpByEmail). On a match we deep-link straight to that company's SSO on
+ * its own tenant; the domain→IdP mapping lives entirely in FusionAuth, not
+ * hardcoded here. If no IdP owns the domain, the email is still passed through as
+ * `login_hint` to the default hosted login page.
  */
 export default function WorkEmailForm() {
   return (

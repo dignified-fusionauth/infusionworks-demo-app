@@ -3,6 +3,7 @@ import {
   buildAuthorizeUrl,
   fusionAuthConfig,
   getTenantIdForIdp,
+  lookupIdpByEmail,
 } from "@/lib/fusionauth";
 import { randomUrlSafeString, codeChallengeFromVerifier } from "@/lib/pkce";
 
@@ -59,6 +60,13 @@ export function safeReturnTo(raw: string | null): string {
  * name the tenant (a universal app isn't tenant-bound, so FusionAuth can't infer
  * it). Unless the caller pins an explicit `tenantId`, we derive it from the
  * company's tenant-scoped IdP named by `idpHint`. See getTenantIdForIdp.
+ *
+ * Email auto-discovery: when the work-email form sends only a `loginHint` (no
+ * company was clicked), we resolve the email's domain to its owning IdP + tenant
+ * via FusionAuth's managed-domain lookup (see lookupIdpByEmail) and deep-link
+ * straight to that company's SSO — no domain→IdP mapping is hardcoded in this
+ * app. If no IdP owns the domain, we fall back to passing `login_hint` through
+ * to the hosted page on the default tenant.
  */
 export async function startOAuthRedirect(request: NextRequest) {
   const q = request.nextUrl.searchParams;
@@ -67,16 +75,31 @@ export async function startOAuthRedirect(request: NextRequest) {
   const codeChallenge = codeChallengeFromVerifier(codeVerifier);
   const returnTo = safeReturnTo(q.get("redirect_uri"));
 
-  const idpHint = q.get("idpHint") || undefined;
+  let idpHint = q.get("idpHint") || undefined;
+  const loginHint = q.get("loginHint") || undefined;
   const explicitTenant = q.get("tenantId") || undefined;
+
+  // Auto-discovery: an email with no explicit company/IdP -> ask FusionAuth
+  // which IdP owns that email domain, and carry its owning tenant forward.
+  let discoveredTenant: string | undefined;
+  if (!idpHint && loginHint) {
+    const match = await lookupIdpByEmail(loginHint);
+    if (match) {
+      idpHint = match.idpId;
+      discoveredTenant = match.tenantId;
+    }
+  }
+
   const tenantId =
-    explicitTenant ?? (idpHint ? await getTenantIdForIdp(idpHint) : undefined);
+    explicitTenant ??
+    discoveredTenant ??
+    (idpHint ? await getTenantIdForIdp(idpHint) : undefined);
 
   const authorizeUrl = buildAuthorizeUrl({
     state,
     codeChallenge,
     idpHint,
-    loginHint: q.get("loginHint") || undefined,
+    loginHint,
     tenantId,
   });
 
